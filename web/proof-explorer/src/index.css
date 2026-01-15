@@ -1,0 +1,465 @@
+/* Certen Proof Explorer - Global Styles
+ * Matching Certen Protocol Brand Guidelines
+ * Color Palette: Orange Primary (#E67E22), Dark Navy Background (#0f0f1e)
+ */
+
+:root {
+  /* Certen Brand Colors */
+  --certen-primary: #E67E22;
+  --certen-primary-dark: #C76919;
+  --certen-primary-light: rgba(230, 126, 34, 0.15);
+  --certen-primary-glow: rgba(230, 126, 34, 0.3);
+
+  /* Background Colors */
+  --certen-bg-base: #0f0f1e;
+  --certen-bg-elevated: #1a1a2e;
+  --certen-bg-spotlight: #242438;
+
+  /* Text Colors */
+  --certen-text-primary: #ffffff;
+  --certen-text-secondary: #94a3b8;
+  --certen-text-tertiary: #64748b;
+
+  /* Border Colors */
+  --certen-border: rgba(230, 126, 34, 0.15);
+  --certen-border-hover: rgba(230, 126, 34, 0.3);
+
+  /* Status Colors */
+  --certen-success: #10b981;
+  --certen-warning: #f59e0b;
+  --certen-error: #ef4444;
+  --certen-info: #E67E22;
+
+  /* Governance Level Colors */
+  --color-g0: #E67E22;
+  --color-g1: #a855f7;
+  --color-g2: #06b6d4;
+
+  /* Legacy compatibility */
+  --color-primary: #E67E22;
+  --color-success: #10b981;
+  --color-warning: #f59e0b;
+  --color-error: #ef4444;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, Inter, 'Segoe UI', sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  background-color: var(--certen-bg-base);
+  color: var(--certen-text-primary);
+}
+
+code {
+  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, Courier, monospace;
+  background: rgba(230, 126, 34, 0.1);
+  padding: 2px 6px;
+  border-radius: 4px;
+  color: var(--certen-text-primary);
+}
+
+a {
+  color: var(--certen-primary);
+  text-decoration: none;
+}
+
+a:hover {
+  color: var(--certen-primary-dark);
+}
+
+/* Layout */
+.app-layout {
+  min-height: 100vh;
+  background-color: var(--certen-bg-base);
+}
+
+.app-header {
+  background: var(--certen-bg-elevated) !important;
+  border-bottom: 1px solid var(--certen-border);
+  padding: 0 24px;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  height: 72px;
+}
+
+.app-logo-img {
+  height: 56px;
+  mix-blend-mode: screen;
+  margin-right: 8px;
+}
+
+.app-title {
+  color: var(--certen-text-primary);
+  font-size: 20px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  white-space: nowrap;
+  border-right: 1px solid var(--certen-border);
+  padding-right: 20px;
+  margin-right: 4px;
+}
+
+.app-content {
+  padding: 24px;
+  min-height: calc(100vh - 72px - 70px);
+  background-color: var(--certen-bg-base);
+}
+
+.app-footer {
+  text-align: center;
+  background: var(--certen-bg-base) !important;
+  color: var(--certen-text-tertiary);
+  border-top: 1px solid var(--certen-border);
+  padding: 24px;
+  font-size: 13px;
+}
+
+/* Version Badge in Header */
+.version-badge {
+  color: var(--certen-text-secondary);
+  font-size: 12px;
+  opacity: 0.8;
+}
+
+/* Cards - Certen Style */
+.ant-card {
+  background: var(--certen-bg-elevated) !important;
+  border: 1px solid var(--certen-border) !important;
+  border-radius: 8px !important;
+}
+
+.ant-card-head {
+  background: transparent !important;
+  border-bottom: 1px solid var(--certen-border) !important;
+  color: var(--certen-text-primary);
+}
+
+.ant-card-head-title {
+  color: var(--certen-text-primary);
+  font-weight: 600;
+}
+
+.ant-card-body {
+  color: var(--certen-text-primary);
+}
+
+/* Tables */
+.ant-table {
+  background: var(--certen-bg-elevated) !important;
+  border-radius: 8px !important;
+  overflow: hidden;
+}
+
+.ant-table-thead > tr > th {
+  background: var(--certen-bg-elevated) !important;
+  color: var(--certen-text-secondary) !important;
+  border-bottom: 1px solid var(--certen-border) !important;
+  font-weight: 600;
+}
+
+.ant-table-tbody > tr > td {
+  border-bottom: 1px solid rgba(230, 126, 34, 0.08) !important;
+}
+
+.ant-table-tbody > tr:hover > td {
+  background: rgba(230, 126, 34, 0.05) !important;
+}
+
+/* Search Form */
+.search-form {
+  background: var(--certen-bg-elevated);
+  padding: 24px;
+  border-radius: 8px;
+  margin-bottom: 24px;
+  border: 1px solid var(--certen-border);
+}
+
+/* Tags - Status Colors */
+.ant-tag {
+  border-radius: 6px;
+  font-weight: 500;
+}
+
+/* Custom Status Tags */
+.ant-tag-gold,
+.ant-tag[color="gold"] {
+  background: rgba(245, 158, 11, 0.15) !important;
+  border-color: rgba(245, 158, 11, 0.3) !important;
+  color: #f59e0b !important;
+}
+
+.ant-tag-blue,
+.ant-tag[color="blue"] {
+  background: rgba(230, 126, 34, 0.15) !important;
+  border-color: rgba(230, 126, 34, 0.3) !important;
+  color: #E67E22 !important;
+}
+
+.ant-tag-cyan,
+.ant-tag[color="cyan"] {
+  background: rgba(6, 182, 212, 0.15) !important;
+  border-color: rgba(6, 182, 212, 0.3) !important;
+  color: #06b6d4 !important;
+}
+
+.ant-tag-purple,
+.ant-tag[color="purple"] {
+  background: rgba(168, 85, 247, 0.15) !important;
+  border-color: rgba(168, 85, 247, 0.3) !important;
+  color: #a855f7 !important;
+}
+
+.ant-tag-green,
+.ant-tag[color="green"] {
+  background: rgba(16, 185, 129, 0.15) !important;
+  border-color: rgba(16, 185, 129, 0.3) !important;
+  color: #10b981 !important;
+}
+
+.ant-tag-red,
+.ant-tag[color="red"] {
+  background: rgba(239, 68, 68, 0.15) !important;
+  border-color: rgba(239, 68, 68, 0.3) !important;
+  color: #ef4444 !important;
+}
+
+/* Hash Display */
+.hash-mono {
+  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, Courier, monospace;
+  font-size: 12px;
+  color: var(--certen-text-primary);
+}
+
+/* Proof Chain Visualization */
+.proof-chain-container {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px;
+  overflow-x: auto;
+}
+
+.proof-layer-card {
+  min-width: 180px;
+  text-align: center;
+}
+
+.proof-layer-verified {
+  border-color: var(--certen-success) !important;
+  background: rgba(16, 185, 129, 0.1) !important;
+}
+
+.proof-layer-pending {
+  border-color: var(--certen-warning) !important;
+  background: rgba(245, 158, 11, 0.1) !important;
+}
+
+/* Governance Levels */
+.gov-level-g0 {
+  border-left: 4px solid var(--color-g0) !important;
+}
+
+.gov-level-g1 {
+  border-left: 4px solid var(--color-g1) !important;
+}
+
+.gov-level-g2 {
+  border-left: 4px solid var(--color-g2) !important;
+}
+
+/* Buttons */
+.ant-btn-primary {
+  background: var(--certen-primary) !important;
+  border-color: var(--certen-primary) !important;
+  font-weight: 600;
+}
+
+.ant-btn-primary:hover {
+  background: var(--certen-primary-dark) !important;
+  border-color: var(--certen-primary-dark) !important;
+}
+
+.ant-btn-default {
+  background: transparent !important;
+  border-color: var(--certen-border) !important;
+  color: var(--certen-text-primary) !important;
+}
+
+.ant-btn-default:hover {
+  border-color: var(--certen-primary) !important;
+  color: var(--certen-primary) !important;
+}
+
+/* Radio Buttons */
+.ant-radio-button-wrapper {
+  background: transparent !important;
+  border-color: var(--certen-border) !important;
+  color: var(--certen-text-secondary) !important;
+}
+
+.ant-radio-button-wrapper-checked {
+  background: var(--certen-primary-light) !important;
+  border-color: var(--certen-primary) !important;
+  color: var(--certen-primary) !important;
+}
+
+/* Inputs */
+.ant-input,
+.ant-input-affix-wrapper {
+  background: rgba(255, 255, 255, 0.02) !important;
+  border-color: var(--certen-border) !important;
+  color: var(--certen-text-primary) !important;
+}
+
+.ant-input:focus,
+.ant-input-affix-wrapper:focus,
+.ant-input-affix-wrapper-focused {
+  border-color: var(--certen-primary) !important;
+  box-shadow: 0 0 0 2px rgba(230, 126, 34, 0.1) !important;
+}
+
+.ant-input::placeholder {
+  color: var(--certen-text-tertiary) !important;
+}
+
+/* Select */
+.ant-select-selector {
+  background: rgba(255, 255, 255, 0.02) !important;
+  border-color: var(--certen-border) !important;
+}
+
+.ant-select-dropdown {
+  background: var(--certen-bg-elevated) !important;
+  border: 1px solid var(--certen-border);
+}
+
+.ant-select-item-option-selected {
+  background: var(--certen-primary-light) !important;
+}
+
+/* Modals */
+.ant-modal-content {
+  background: var(--certen-bg-elevated) !important;
+  border: 1px solid var(--certen-border);
+}
+
+.ant-modal-header {
+  background: transparent !important;
+  border-bottom: 1px solid var(--certen-border) !important;
+}
+
+.ant-modal-title {
+  color: var(--certen-text-primary) !important;
+}
+
+/* Alerts */
+.ant-alert {
+  border-radius: 8px;
+}
+
+.ant-alert-info {
+  background: rgba(230, 126, 34, 0.1) !important;
+  border-color: rgba(230, 126, 34, 0.2) !important;
+}
+
+/* Breadcrumbs */
+.ant-breadcrumb {
+  color: var(--certen-text-secondary);
+}
+
+.ant-breadcrumb a {
+  color: var(--certen-primary) !important;
+}
+
+.ant-breadcrumb-separator {
+  color: var(--certen-text-tertiary);
+}
+
+/* Tabs */
+.ant-tabs-tab {
+  color: var(--certen-text-secondary) !important;
+  font-weight: 600;
+}
+
+.ant-tabs-tab-active .ant-tabs-tab-btn {
+  color: var(--certen-primary) !important;
+}
+
+.ant-tabs-ink-bar {
+  background: var(--certen-primary) !important;
+}
+
+/* Statistic */
+.ant-statistic-title {
+  color: var(--certen-text-secondary) !important;
+}
+
+.ant-statistic-content {
+  color: var(--certen-text-primary) !important;
+}
+
+/* Progress */
+.ant-progress-bg {
+  background: var(--certen-primary) !important;
+}
+
+/* Descriptions */
+.ant-descriptions-bordered .ant-descriptions-item-label {
+  background: rgba(230, 126, 34, 0.05) !important;
+  color: var(--certen-text-secondary) !important;
+}
+
+.ant-descriptions-bordered .ant-descriptions-item-content {
+  color: var(--certen-text-primary) !important;
+}
+
+/* Tooltip */
+.ant-tooltip-inner {
+  background: var(--certen-bg-spotlight) !important;
+  color: var(--certen-text-primary);
+}
+
+/* Scrollbar Styling */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--certen-bg-base);
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(230, 126, 34, 0.3);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(230, 126, 34, 0.5);
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+  .app-content {
+    padding: 12px;
+  }
+
+  .proof-chain-container {
+    flex-direction: column;
+  }
+
+  .proof-layer-card {
+    width: 100%;
+  }
+
+  .app-header {
+    padding: 0 12px;
+  }
+}
