@@ -2491,6 +2491,53 @@ func (r *ProofArtifactRepository) QueryProofsForExport(ctx context.Context, filt
 	return proofs, nil
 }
 
+// ============================================================================
+// STATISTICS HELPER METHODS
+// ============================================================================
+
+// CountUniqueValidators returns the count of unique validators that have submitted attestations
+func (r *ProofArtifactRepository) CountUniqueValidators(ctx context.Context) (int, error) {
+	query := `SELECT COUNT(DISTINCT validator_id) FROM validator_attestations`
+	var count int
+	err := r.db.QueryRowContext(ctx, query).Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf("failed to count unique validators: %w", err)
+	}
+	return count, nil
+}
+
+// CountProofsWithQuorum returns the count of proofs that have reached the specified quorum threshold
+func (r *ProofArtifactRepository) CountProofsWithQuorum(ctx context.Context, quorumThreshold int) (int, error) {
+	query := `
+		SELECT COUNT(*) FROM (
+			SELECT proof_id
+			FROM validator_attestations
+			WHERE signature_valid = TRUE
+			GROUP BY proof_id
+			HAVING COUNT(*) >= $1
+		) AS proofs_with_quorum`
+	var count int
+	err := r.db.QueryRowContext(ctx, query, quorumThreshold).Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf("failed to count proofs with quorum: %w", err)
+	}
+	return count, nil
+}
+
+// GetLastAnchorTime returns the timestamp of the most recent anchor
+func (r *ProofArtifactRepository) GetLastAnchorTime(ctx context.Context) (*time.Time, error) {
+	query := `SELECT MAX(anchored_at) FROM proof_artifacts WHERE anchored_at IS NOT NULL`
+	var lastAnchor sql.NullTime
+	err := r.db.QueryRowContext(ctx, query).Scan(&lastAnchor)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get last anchor time: %w", err)
+	}
+	if !lastAnchor.Valid {
+		return nil, nil
+	}
+	return &lastAnchor.Time, nil
+}
+
 // Unused import fix
 var _ = hex.EncodeToString
 var _ = json.Marshal

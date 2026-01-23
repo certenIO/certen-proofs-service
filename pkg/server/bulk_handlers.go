@@ -43,6 +43,7 @@ type BulkHandlers struct {
 	exportJobs      map[uuid.UUID]*ExportJob
 	exportMu        sync.RWMutex
 	maxExportSize   int
+	startTime       time.Time
 }
 
 // BulkHandlersConfig contains configuration for bulk handlers
@@ -77,6 +78,7 @@ func NewBulkHandlers(
 		apiKeyValidator: NewAPIKeyValidator(repos),
 		exportJobs:      make(map[uuid.UUID]*ExportJob),
 		maxExportSize:   config.MaxExportSize,
+		startTime:       time.Now(),
 	}
 }
 
@@ -418,30 +420,36 @@ func (h *BulkHandlers) HandleBulkVerify(w http.ResponseWriter, r *http.Request) 
 // STATISTICS ENDPOINTS
 // =============================================================================
 
-// ProofStatistics represents proof statistics
+// ProofStatistics represents proof statistics - matches frontend ProofStatistics type
 type ProofStatistics struct {
-	TotalProofs         int64                  `json:"total_proofs"`
-	ProofsByStatus      map[string]int64       `json:"proofs_by_status"`
-	ProofsByType        map[string]int64       `json:"proofs_by_type"`
-	ProofsByGovLevel    map[string]int64       `json:"proofs_by_gov_level"`
-	AttestationStats    AttestationStatistics  `json:"attestation_stats"`
-	Last24HourStats     TimeWindowStats        `json:"last_24h"`
-	Last7DayStats       TimeWindowStats        `json:"last_7d"`
-	GeneratedAt         time.Time              `json:"generated_at"`
+	TotalProofs      int64                 `json:"total_proofs"`
+	ProofsByStatus   map[string]int64      `json:"proofs_by_status"`
+	ProofsByType     map[string]int64      `json:"proofs_by_type"`
+	ProofsByGovLevel map[string]int64      `json:"proofs_by_gov_level"`
+	AttestationStats AttestationStatistics `json:"attestation_stats"`
+	TimeWindows      TimeWindows           `json:"time_windows"`
+	GeneratedAt      time.Time             `json:"generated_at"`
 }
 
-// AttestationStatistics represents attestation-related statistics
+// TimeWindows wraps time window statistics
+type TimeWindows struct {
+	Last24h TimeWindowStats `json:"last_24h"`
+	Last7d  TimeWindowStats `json:"last_7d"`
+}
+
+// AttestationStatistics represents attestation-related statistics - matches frontend
 type AttestationStatistics struct {
-	TotalAttestations   int64   `json:"total_attestations"`
-	ValidAttestations   int64   `json:"valid_attestations"`
-	QuorumReachedCount  int64   `json:"quorum_reached_count"`
-	AveragePerProof     float64 `json:"average_per_proof"`
+	TotalAttestations  int64   `json:"total_attestations"`
+	UniqueValidators   int64   `json:"unique_validators"`
+	QuorumRate         float64 `json:"quorum_rate"`
+	ValidAttestations  int64   `json:"valid_attestations,omitempty"`
+	AveragePerProof    float64 `json:"average_per_proof,omitempty"`
 }
 
 // TimeWindowStats represents statistics for a time window
 type TimeWindowStats struct {
-	ProofsCreated    int64 `json:"proofs_created"`
-	ProofsVerified   int64 `json:"proofs_verified"`
+	ProofsCreated     int64 `json:"proofs_created"`
+	ProofsVerified    int64 `json:"proofs_verified"`
 	BundlesDownloaded int64 `json:"bundles_downloaded"`
 }
 
@@ -513,40 +521,58 @@ func (h *BulkHandlers) HandleGetProofStats(w http.ResponseWriter, r *http.Reques
 		ProofsByType:     proofsByType,
 		ProofsByGovLevel: proofsByGovLevel,
 		AttestationStats: attestationStats,
-		Last24HourStats:  last24hStats,
-		Last7DayStats:    last7dStats,
-		GeneratedAt:      time.Now().UTC(),
+		TimeWindows: TimeWindows{
+			Last24h: last24hStats,
+			Last7d:  last7dStats,
+		},
+		GeneratedAt: time.Now().UTC(),
 	}
 
 	h.writeJSON(w, http.StatusOK, stats)
 }
 
-// SystemHealth represents system health status
+// SystemHealth represents system health status - matches frontend SystemHealth type
 type SystemHealth struct {
-	Status           string                 `json:"status"` // healthy, degraded, unhealthy
-	ValidatorID      string                 `json:"validator_id"`
-	DatabaseStatus   string                 `json:"database_status"`
-	Services         map[string]ServiceStatus `json:"services"`
-	Metrics          SystemMetrics          `json:"metrics"`
-	LastCheckedAt    time.Time              `json:"last_checked_at"`
+	Status        string           `json:"status"` // healthy, degraded, unhealthy
+	Version       string           `json:"version"`
+	UptimeSeconds int64            `json:"uptime_seconds"`
+	Components    HealthComponents `json:"components"`
+	Timestamp     time.Time        `json:"timestamp"`
 }
 
-// ServiceStatus represents a service's health status
-type ServiceStatus struct {
-	Status      string `json:"status"`
-	Message     string `json:"message,omitempty"`
-	LastActivity time.Time `json:"last_activity,omitempty"`
+// HealthComponents contains health status of all system components
+type HealthComponents struct {
+	Database           DatabaseHealth    `json:"database"`
+	AccumulateClient   ClientHealth      `json:"accumulate_client"`
+	AnchorService      AnchorHealth      `json:"anchor_service"`
+	AttestationService AttestationHealth `json:"attestation_service"`
 }
 
-// SystemMetrics represents system-level metrics
-type SystemMetrics struct {
-	ActiveExportJobs    int     `json:"active_export_jobs"`
-	PendingProofRequests int    `json:"pending_proof_requests"`
-	RequestsPerMinute   float64 `json:"requests_per_minute"`
-	AverageLatencyMs    float64 `json:"average_latency_ms"`
+// DatabaseHealth represents database component health
+type DatabaseHealth struct {
+	Status    string `json:"status"`
+	LatencyMs int64  `json:"latency_ms"`
 }
 
-// HandleGetSystemHealth handles GET /api/v1/stats/system
+// ClientHealth represents client connection health
+type ClientHealth struct {
+	Status    string `json:"status"`
+	Connected bool   `json:"connected"`
+}
+
+// AnchorHealth represents anchor service health
+type AnchorHealth struct {
+	Status       string `json:"status"`
+	LastAnchorAt string `json:"last_anchor_at,omitempty"`
+}
+
+// AttestationHealth represents attestation service health
+type AttestationHealth struct {
+	Status           string `json:"status"`
+	ActiveValidators int    `json:"active_validators"`
+}
+
+// HandleGetSystemHealth handles GET /api/v1/system/health
 func (h *BulkHandlers) HandleGetSystemHealth(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		h.writeError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Only GET is allowed")
@@ -555,56 +581,61 @@ func (h *BulkHandlers) HandleGetSystemHealth(w http.ResponseWriter, r *http.Requ
 
 	ctx := r.Context()
 
-	// Check database connectivity
+	// Check database connectivity and measure latency
 	dbStatus := "healthy"
+	var dbLatencyMs int64 = 0
+	dbStart := time.Now()
 	if _, err := h.repos.ProofArtifacts.CountProofs(ctx, nil); err != nil {
 		dbStatus = "unhealthy"
+	} else {
+		dbLatencyMs = time.Since(dbStart).Milliseconds()
 	}
 
-	// Count active export jobs
-	h.exportMu.RLock()
-	activeJobs := 0
-	for _, job := range h.exportJobs {
-		if job.Status == "pending" || job.Status == "processing" {
-			activeJobs++
+	// Count active validators (unique validators with recent attestations)
+	activeValidators := 0
+	if h.repos != nil && h.repos.ProofArtifacts != nil {
+		activeValidators, _ = h.repos.ProofArtifacts.CountUniqueValidators(ctx)
+	}
+
+	// Get last anchor time
+	lastAnchorAt := ""
+	if h.repos != nil && h.repos.ProofArtifacts != nil {
+		if lastAnchor, err := h.repos.ProofArtifacts.GetLastAnchorTime(ctx); err == nil && lastAnchor != nil {
+			lastAnchorAt = lastAnchor.Format(time.RFC3339)
 		}
 	}
-	h.exportMu.RUnlock()
-
-	// Count pending proof requests
-	pendingRequests, _ := h.repos.ProofArtifacts.CountPendingProofRequests(ctx)
 
 	// Determine overall status
 	overallStatus := "healthy"
 	if dbStatus == "unhealthy" {
 		overallStatus = "unhealthy"
-	} else if activeJobs > 10 || pendingRequests > 100 {
+	} else if dbLatencyMs > 1000 {
 		overallStatus = "degraded"
 	}
 
 	health := SystemHealth{
-		Status:         overallStatus,
-		ValidatorID:    h.validatorID,
-		DatabaseStatus: dbStatus,
-		Services: map[string]ServiceStatus{
-			"proof_service": {
-				Status:  "healthy",
-				Message: "Operational",
+		Status:        overallStatus,
+		Version:       "1.0.0",
+		UptimeSeconds: int64(time.Since(h.startTime).Seconds()),
+		Components: HealthComponents{
+			Database: DatabaseHealth{
+				Status:    dbStatus,
+				LatencyMs: dbLatencyMs,
 			},
-			"attestation_service": {
-				Status:  "healthy",
-				Message: "Collecting attestations",
+			AccumulateClient: ClientHealth{
+				Status:    "healthy",
+				Connected: true,
 			},
-			"export_service": {
-				Status:  "healthy",
-				Message: fmt.Sprintf("%d active jobs", activeJobs),
+			AnchorService: AnchorHealth{
+				Status:       "healthy",
+				LastAnchorAt: lastAnchorAt,
+			},
+			AttestationService: AttestationHealth{
+				Status:           "healthy",
+				ActiveValidators: activeValidators,
 			},
 		},
-		Metrics: SystemMetrics{
-			ActiveExportJobs:     activeJobs,
-			PendingProofRequests: pendingRequests,
-		},
-		LastCheckedAt: time.Now().UTC(),
+		Timestamp: time.Now().UTC(),
 	}
 
 	h.writeJSON(w, http.StatusOK, health)
@@ -776,10 +807,17 @@ func (h *BulkHandlers) getAttestationStats(ctx context.Context) AttestationStati
 	validCount, _ := h.repos.ProofArtifacts.CountAttestations(ctx, &validOnly)
 	stats.ValidAttestations = int64(validCount)
 
-	// Calculate average (simplified)
+	// Get unique validators count
+	uniqueValidators, _ := h.repos.ProofArtifacts.CountUniqueValidators(ctx)
+	stats.UniqueValidators = int64(uniqueValidators)
+
+	// Calculate quorum rate (percentage of proofs that reached quorum)
 	totalProofs, _ := h.repos.ProofArtifacts.CountProofs(ctx, nil)
 	if totalProofs > 0 {
 		stats.AveragePerProof = float64(totalCount) / float64(totalProofs)
+		// Count proofs with at least 3 valid attestations (quorum threshold)
+		proofsWithQuorum, _ := h.repos.ProofArtifacts.CountProofsWithQuorum(ctx, 3)
+		stats.QuorumRate = float64(proofsWithQuorum) / float64(totalProofs) * 100.0
 	}
 
 	return stats

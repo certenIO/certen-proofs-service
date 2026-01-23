@@ -72,6 +72,11 @@ func main() {
 		ValidatorID:        cfg.ValidatorID,
 		RateLimitPerMinute: cfg.RateLimitRequests,
 	}, logger)
+	bulkHandlers := server.NewBulkHandlers(repos, &server.BulkHandlersConfig{
+		ValidatorID:        cfg.ValidatorID,
+		RateLimitPerMinute: cfg.RateLimitRequests,
+		MaxExportSize:      10000,
+	}, logger)
 
 	// Set up HTTP router
 	mux := http.NewServeMux()
@@ -100,6 +105,14 @@ func main() {
 	// API v1 Verification endpoints
 	mux.HandleFunc("/api/v1/proofs/verify/merkle", bundleHandlers.HandleVerifyMerkle)
 	mux.HandleFunc("/api/v1/proofs/verify/governance", bundleHandlers.HandleVerifyGovernance)
+
+	// API v1 Statistics and Health endpoints
+	mux.HandleFunc("/api/v1/proofs/stats", bulkHandlers.HandleGetProofStats)
+	mux.HandleFunc("/api/v1/system/health", bulkHandlers.HandleGetSystemHealth)
+
+	// API v1 Bulk Export endpoints
+	mux.HandleFunc("/api/v1/proofs/bulk/export", bulkHandlers.HandleBulkExport)
+	mux.HandleFunc("/api/v1/proofs/bulk/export/", bulkHandlers.HandleGetExportStatus)
 
 	// API v1 Proof Detail endpoints (with sub-paths)
 	mux.HandleFunc("/api/v1/proofs/", func(w http.ResponseWriter, r *http.Request) {
