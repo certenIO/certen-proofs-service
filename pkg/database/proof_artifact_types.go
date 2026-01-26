@@ -334,9 +334,10 @@ type AnchorReferenceRecord struct {
 	ContractAddress *string `json:"contract_address,omitempty" db:"contract_address"`
 
 	// Confirmation Status
-	Confirmations int        `json:"confirmations" db:"confirmations"`
-	IsConfirmed   bool       `json:"is_confirmed" db:"is_confirmed"`
-	ConfirmedAt   *time.Time `json:"confirmed_at,omitempty" db:"confirmed_at"`
+	Confirmations         int        `json:"confirmations" db:"confirmations"`
+	RequiredConfirmations *int       `json:"required_confirmations,omitempty" db:"required_confirmations"`
+	IsConfirmed           bool       `json:"is_confirmed" db:"is_confirmed"`
+	ConfirmedAt           *time.Time `json:"confirmed_at,omitempty" db:"confirmed_at"`
 
 	// Gas Costs
 	GasUsed      *int64  `json:"gas_used,omitempty" db:"gas_used"`

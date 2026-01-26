@@ -823,7 +823,7 @@ func (r *ProofArtifactRepository) GetAnchorReference(ctx context.Context, proofI
 	query := `
 		SELECT reference_id, proof_id, target_chain, chain_id, network_name,
 			   anchor_tx_hash, anchor_block_number, anchor_block_hash, anchor_timestamp,
-			   contract_address, confirmations, is_confirmed, confirmed_at,
+			   contract_address, confirmations, required_confirmations, is_confirmed, confirmed_at,
 			   gas_used, gas_price_wei, total_cost_wei, created_at
 		FROM anchor_references
 		WHERE proof_id = $1`
@@ -832,7 +832,7 @@ func (r *ProofArtifactRepository) GetAnchorReference(ctx context.Context, proofI
 	err := r.db.QueryRowContext(ctx, query, proofID).Scan(
 		&ref.ReferenceID, &ref.ProofID, &ref.TargetChain, &ref.ChainID, &ref.NetworkName,
 		&ref.AnchorTxHash, &ref.AnchorBlockNumber, &ref.AnchorBlockHash, &ref.AnchorTimestamp,
-		&ref.ContractAddress, &ref.Confirmations, &ref.IsConfirmed, &ref.ConfirmedAt,
+		&ref.ContractAddress, &ref.Confirmations, &ref.RequiredConfirmations, &ref.IsConfirmed, &ref.ConfirmedAt,
 		&ref.GasUsed, &ref.GasPriceWei, &ref.TotalCostWei, &ref.CreatedAt,
 	)
 
