@@ -86,7 +86,7 @@ func (r *ProofArtifactRepository) GetProofByID(ctx context.Context, proofID uuid
 			   batch_id, batch_position, anchor_id, anchor_tx_hash, anchor_block_number, anchor_chain,
 			   merkle_root, leaf_hash, leaf_index, gov_level, proof_class, validator_id,
 			   status, verification_status, created_at, anchored_at, verified_at,
-			   artifact_json, artifact_hash
+			   COALESCE(artifact_json, '{}'::jsonb) as artifact_json, artifact_hash
 		FROM proof_artifacts
 		WHERE proof_id = $1`
 
@@ -116,7 +116,7 @@ func (r *ProofArtifactRepository) GetProofByTxHash(ctx context.Context, txHash s
 			   batch_id, batch_position, anchor_id, anchor_tx_hash, anchor_block_number, anchor_chain,
 			   merkle_root, leaf_hash, leaf_index, gov_level, proof_class, validator_id,
 			   status, verification_status, created_at, anchored_at, verified_at,
-			   artifact_json, artifact_hash
+			   COALESCE(artifact_json, '{}'::jsonb) as artifact_json, artifact_hash
 		FROM proof_artifacts
 		WHERE accum_tx_hash = $1`
 
@@ -186,7 +186,7 @@ func (r *ProofArtifactRepository) GetProofsByBatch(ctx context.Context, batchID 
 			   batch_id, batch_position, anchor_id, anchor_tx_hash, anchor_block_number, anchor_chain,
 			   merkle_root, leaf_hash, leaf_index, gov_level, proof_class, validator_id,
 			   status, verification_status, created_at, anchored_at, verified_at,
-			   artifact_json, artifact_hash
+			   COALESCE(artifact_json, '{}'::jsonb) as artifact_json, artifact_hash
 		FROM proof_artifacts
 		WHERE batch_id = $1
 		ORDER BY batch_position`
@@ -222,7 +222,7 @@ func (r *ProofArtifactRepository) GetProofsByAnchorTx(ctx context.Context, ancho
 			   pa.batch_id, pa.batch_position, pa.anchor_id, pa.anchor_tx_hash, pa.anchor_block_number, pa.anchor_chain,
 			   pa.merkle_root, pa.leaf_hash, pa.leaf_index, pa.gov_level, pa.proof_class, pa.validator_id,
 			   pa.status, pa.verification_status, pa.created_at, pa.anchored_at, pa.verified_at,
-			   pa.artifact_json, pa.artifact_hash
+			   COALESCE(pa.artifact_json, '{}'::jsonb) as artifact_json, pa.artifact_hash
 		FROM proof_artifacts pa
 		WHERE pa.anchor_tx_hash = $1
 		ORDER BY pa.batch_position`
@@ -467,7 +467,7 @@ func (r *ProofArtifactRepository) GetChainedProofLayers(ctx context.Context, pro
 			   bvn_partition, receipt_anchor,
 			   bvn_root, dn_root, anchor_sequence, bvn_partition_id,
 			   dn_block_hash, dn_block_height, consensus_timestamp,
-			   layer_json, verified, verified_at, created_at
+			   COALESCE(layer_json, '{}'::jsonb) as layer_json, verified, verified_at, created_at
 		FROM chained_proof_layers
 		WHERE proof_id = $1
 		ORDER BY layer_number`
@@ -554,7 +554,7 @@ func (r *ProofArtifactRepository) GetGovernanceProofLevels(ctx context.Context, 
 			   block_height, finality_timestamp, anchor_height, is_anchored,
 			   authority_url, key_page_count, threshold_m, threshold_n, signature_count,
 			   outcome_type, outcome_hash, binding_enforced,
-			   level_json, verified, verified_at, created_at
+			   COALESCE(level_json, '{}'::jsonb) as level_json, verified, verified_at, created_at
 		FROM governance_proof_levels
 		WHERE proof_id = $1
 		ORDER BY gov_level`
@@ -736,7 +736,8 @@ func (r *ProofArtifactRepository) CreateVerificationRecord(ctx context.Context, 
 func (r *ProofArtifactRepository) GetVerificationHistory(ctx context.Context, proofID uuid.UUID) ([]ProofVerificationRecord, error) {
 	query := `
 		SELECT verification_id, proof_id, verification_type, passed, error_message, error_code,
-			   verifier_id, verification_method, duration_ms, artifacts_json, created_at
+			   verifier_id, verification_method, duration_ms,
+			   COALESCE(artifacts_json, '{}'::jsonb) as artifacts_json, created_at
 		FROM verification_history
 		WHERE proof_id = $1
 		ORDER BY created_at DESC`
@@ -860,7 +861,7 @@ func (r *ProofArtifactRepository) GetProofsModifiedSince(ctx context.Context, si
 			   batch_id, batch_position, anchor_id, anchor_tx_hash, anchor_block_number, anchor_chain,
 			   merkle_root, leaf_hash, leaf_index, gov_level, proof_class, validator_id,
 			   status, verification_status, created_at, anchored_at, verified_at,
-			   artifact_json, artifact_hash
+			   COALESCE(artifact_json, '{}'::jsonb) as artifact_json, artifact_hash
 		FROM proof_artifacts
 		WHERE created_at > $1 OR anchored_at > $1
 		ORDER BY COALESCE(anchored_at, created_at)
@@ -1198,7 +1199,7 @@ func (r *ProofArtifactRepository) GetProofsForBulkExport(ctx context.Context, ac
 			   pa.batch_id, pa.batch_position, pa.anchor_id, pa.anchor_tx_hash, pa.anchor_block_number, pa.anchor_chain,
 			   pa.merkle_root, pa.leaf_hash, pa.leaf_index, pa.gov_level, pa.proof_class, pa.validator_id,
 			   pa.status, pa.verification_status, pa.created_at, pa.anchored_at, pa.verified_at,
-			   pa.artifact_json, pa.artifact_hash
+			   COALESCE(pa.artifact_json, '{}'::jsonb) as artifact_json, pa.artifact_hash
 		FROM proof_artifacts pa
 		WHERE pa.created_at >= $%d AND pa.created_at <= $%d
 		%s
@@ -1332,9 +1333,9 @@ func (r *ProofArtifactRepository) GetExternalChainResultByID(ctx context.Context
 	query := `
 		SELECT result_id, proof_id, chain_id, chain_name, block_number, block_hash, transaction_hash,
 			   execution_status, gas_used, return_data,
-			   storage_proof_json, storage_proof_hash,
+			   COALESCE(storage_proof_json, '{}'::jsonb) as storage_proof_json, storage_proof_hash,
 			   sequence_number, previous_result_hash, result_hash,
-			   anchor_proof_hash, artifact_json, verified, verified_at, created_at
+			   anchor_proof_hash, COALESCE(artifact_json, '{}'::jsonb) as artifact_json, verified, verified_at, created_at
 		FROM external_chain_results
 		WHERE result_id = $1`
 
@@ -1362,9 +1363,9 @@ func (r *ProofArtifactRepository) GetExternalChainResultsByProof(ctx context.Con
 	query := `
 		SELECT result_id, proof_id, chain_id, chain_name, block_number, block_hash, transaction_hash,
 			   execution_status, gas_used, return_data,
-			   storage_proof_json, storage_proof_hash,
+			   COALESCE(storage_proof_json, '{}'::jsonb) as storage_proof_json, storage_proof_hash,
 			   sequence_number, previous_result_hash, result_hash,
-			   anchor_proof_hash, artifact_json, verified, verified_at, created_at
+			   anchor_proof_hash, COALESCE(artifact_json, '{}'::jsonb) as artifact_json, verified, verified_at, created_at
 		FROM external_chain_results
 		WHERE proof_id = $1
 		ORDER BY sequence_number ASC`
@@ -1398,9 +1399,9 @@ func (r *ProofArtifactRepository) GetLatestExternalChainResult(ctx context.Conte
 	query := `
 		SELECT result_id, proof_id, chain_id, chain_name, block_number, block_hash, transaction_hash,
 			   execution_status, gas_used, return_data,
-			   storage_proof_json, storage_proof_hash,
+			   COALESCE(storage_proof_json, '{}'::jsonb) as storage_proof_json, storage_proof_hash,
 			   sequence_number, previous_result_hash, result_hash,
-			   anchor_proof_hash, artifact_json, verified, verified_at, created_at
+			   anchor_proof_hash, COALESCE(artifact_json, '{}'::jsonb) as artifact_json, verified, verified_at, created_at
 		FROM external_chain_results
 		WHERE proof_id = $1
 		ORDER BY sequence_number DESC
@@ -1784,7 +1785,7 @@ func (r *ProofArtifactRepository) SaveValidatorSetSnapshot(ctx context.Context, 
 // GetValidatorSetSnapshotByID retrieves a snapshot by ID
 func (r *ProofArtifactRepository) GetValidatorSetSnapshotByID(ctx context.Context, snapshotID uuid.UUID) (*ValidatorSetSnapshotRecord, error) {
 	query := `
-		SELECT snapshot_id, block_number, block_hash, validators_json,
+		SELECT snapshot_id, block_number, block_hash, COALESCE(validators_json, '[]'::jsonb) as validators_json,
 			   validator_root, validator_count, total_weight, threshold_weight,
 			   snapshot_hash, chain_id, chain_name, created_at
 		FROM validator_set_snapshots
@@ -1810,7 +1811,7 @@ func (r *ProofArtifactRepository) GetValidatorSetSnapshotByID(ctx context.Contex
 // GetValidatorSetSnapshotByHash retrieves a snapshot by its hash
 func (r *ProofArtifactRepository) GetValidatorSetSnapshotByHash(ctx context.Context, snapshotHash []byte) (*ValidatorSetSnapshotRecord, error) {
 	query := `
-		SELECT snapshot_id, block_number, block_hash, validators_json,
+		SELECT snapshot_id, block_number, block_hash, COALESCE(validators_json, '[]'::jsonb) as validators_json,
 			   validator_root, validator_count, total_weight, threshold_weight,
 			   snapshot_hash, chain_id, chain_name, created_at
 		FROM validator_set_snapshots
@@ -1836,7 +1837,7 @@ func (r *ProofArtifactRepository) GetValidatorSetSnapshotByHash(ctx context.Cont
 // GetLatestValidatorSetSnapshot retrieves the most recent snapshot for a chain
 func (r *ProofArtifactRepository) GetLatestValidatorSetSnapshot(ctx context.Context, chainID string) (*ValidatorSetSnapshotRecord, error) {
 	query := `
-		SELECT snapshot_id, block_number, block_hash, validators_json,
+		SELECT snapshot_id, block_number, block_hash, COALESCE(validators_json, '[]'::jsonb) as validators_json,
 			   validator_root, validator_count, total_weight, threshold_weight,
 			   snapshot_hash, chain_id, chain_name, created_at
 		FROM validator_set_snapshots
@@ -2459,7 +2460,7 @@ func (r *ProofArtifactRepository) QueryProofsForExport(ctx context.Context, filt
 			   batch_id, batch_position, anchor_id, anchor_tx_hash, anchor_block_number, anchor_chain,
 			   merkle_root, leaf_hash, leaf_index, gov_level, proof_class, validator_id,
 			   status, verification_status, created_at, anchored_at, verified_at,
-			   artifact_json, artifact_hash
+			   COALESCE(artifact_json, '{}'::jsonb) as artifact_json, artifact_hash
 		FROM proof_artifacts
 		%s
 		ORDER BY created_at DESC
