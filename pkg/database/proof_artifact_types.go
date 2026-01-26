@@ -979,3 +979,160 @@ type ProofCycleCompletionUpdate struct {
 	CycleHash         []byte     `json:"cycle_hash,omitempty"`
 	AllLevelsComplete *bool      `json:"all_levels_complete,omitempty"`
 }
+
+// ============================================================================
+// TRANSACTION CENTER TYPES
+// For web app Transaction Center integration
+// ============================================================================
+
+// IntentSummary is a lightweight intent listing for user's transaction list
+type IntentSummary struct {
+	// Intent Identity
+	IntentID    string  `json:"intent_id" db:"intent_id"`
+	UserID      string  `json:"user_id" db:"user_id"`
+	AccumTxHash string  `json:"accumulate_tx_hash" db:"accumulate_tx_hash"`
+
+	// Transaction Details
+	FromChain   *string `json:"from_chain,omitempty" db:"from_chain"`
+	ToChain     *string `json:"to_chain,omitempty" db:"to_chain"`
+	FromAddress *string `json:"from_address,omitempty" db:"from_address"`
+	ToAddress   *string `json:"to_address,omitempty" db:"to_address"`
+	Amount      *string `json:"amount,omitempty" db:"amount"`
+	TokenSymbol *string `json:"token_symbol,omitempty" db:"token_symbol"`
+	AdiURL      *string `json:"adi_url,omitempty" db:"adi_url"`
+
+	// Status
+	Status           string  `json:"status" db:"status"`
+	GovernanceLevel  *string `json:"governance_level,omitempty" db:"governance_level"`
+	GovernanceValid  bool    `json:"governance_valid" db:"governance_valid"`
+	ChainedProofValid bool   `json:"chained_proof_valid" db:"chained_proof_valid"`
+	CurrentStage     int     `json:"current_stage" db:"current_stage"`
+
+	// Anchor Information
+	AnchorTxHash      *string `json:"anchor_tx_hash,omitempty" db:"anchor_tx_hash"`
+	AnchorConfirmations int   `json:"anchor_confirmations" db:"anchor_confirmations"`
+	AnchorIsFinal     bool    `json:"anchor_is_final" db:"anchor_is_final"`
+
+	// Proof Reference
+	ProofID   *uuid.UUID `json:"proof_id,omitempty" db:"proof_id"`
+	BatchID   *uuid.UUID `json:"batch_id,omitempty" db:"batch_id"`
+
+	// Timestamps
+	CreatedAt       time.Time  `json:"created_at" db:"created_at"`
+	CreatedAtClient *time.Time `json:"created_at_client,omitempty" db:"created_at_client"`
+}
+
+// IntentProofDetails is the full proof detail for an intent
+type IntentProofDetails struct {
+	IntentSummary
+
+	// Full Proof Data
+	Proof            *ProofArtifact         `json:"proof,omitempty"`
+	ChainedLayers    []ChainedProofLayer    `json:"chained_layers,omitempty"`
+	GovernanceLevels []GovernanceProofLevel `json:"governance_levels,omitempty"`
+	AnchorReference  *AnchorReferenceRecord `json:"anchor_reference,omitempty"`
+
+	// Batch Information
+	BatchStatus      *string    `json:"batch_status,omitempty"`
+	BatchMerkleRoot  []byte     `json:"batch_merkle_root,omitempty"`
+	BatchTxCount     int        `json:"batch_tx_count" db:"batch_tx_count"`
+	BatchQuorumMet   bool       `json:"batch_quorum_met" db:"batch_quorum_met"`
+
+	// Attestations Summary
+	AttestationCount int `json:"attestation_count"`
+}
+
+// IntentTimelineEvent represents a single event in the intent's timeline
+type IntentTimelineEvent struct {
+	EventID       uuid.UUID       `json:"event_id" db:"event_id"`
+	ProofID       *uuid.UUID      `json:"proof_id,omitempty" db:"proof_id"`
+	IntentID      string          `json:"intent_id" db:"intent_id"`
+	AccumTxHash   string          `json:"accumulate_tx_hash" db:"accumulate_tx_hash"`
+
+	// Event Details
+	EventType     string          `json:"event_type" db:"event_type"`
+	Phase         string          `json:"phase" db:"phase"`
+	Action        string          `json:"action" db:"action"`
+	Message       string          `json:"message" db:"message"`
+
+	// Actor Information
+	ActorType     string          `json:"actor_type" db:"actor_type"`
+	ActorID       *string         `json:"actor_id,omitempty" db:"actor_id"`
+
+	// Hash Chain
+	PreviousHash  []byte          `json:"previous_hash,omitempty" db:"previous_hash"`
+	CurrentHash   []byte          `json:"current_hash" db:"current_hash"`
+
+	// Additional Details
+	Details       json.RawMessage `json:"details,omitempty" db:"details"`
+
+	// Timestamp
+	Timestamp     time.Time       `json:"timestamp" db:"event_timestamp"`
+}
+
+// IntentAttestationSummary represents attestation info for an intent
+type IntentAttestationSummary struct {
+	IntentID        string    `json:"intent_id"`
+	AccumTxHash     string    `json:"accumulate_tx_hash"`
+	ProofID         *uuid.UUID `json:"proof_id,omitempty"`
+
+	// Ed25519 Attestations
+	Ed25519Attestations []ProofAttestation `json:"ed25519_attestations,omitempty"`
+	Ed25519Count        int                `json:"ed25519_count"`
+
+	// BLS Attestations (if available)
+	BLSAttestations     []BLSAttestationRecord `json:"bls_attestations,omitempty"`
+	BLSCount            int                    `json:"bls_count"`
+
+	// Aggregated BLS (if available)
+	AggregatedBLS       *AggregatedAttestationRecord `json:"aggregated_bls,omitempty"`
+
+	// Quorum Status
+	QuorumRequired      int  `json:"quorum_required"`
+	QuorumAchieved      int  `json:"quorum_achieved"`
+	QuorumMet           bool `json:"quorum_met"`
+}
+
+// IntentFilter defines filters for intent queries (audit mode)
+type IntentFilter struct {
+	// User filter
+	UserID *string `json:"user_id,omitempty"`
+
+	// Intent filter
+	IntentID *string `json:"intent_id,omitempty"`
+
+	// Chain filters
+	FromChain *string `json:"from_chain,omitempty"`
+	ToChain   *string `json:"to_chain,omitempty"`
+
+	// Token filter
+	TokenSymbol *string `json:"token_symbol,omitempty"`
+
+	// ADI filter
+	AdiURL *string `json:"adi_url,omitempty"`
+
+	// Status filters
+	Status          *string `json:"status,omitempty"`
+	GovernanceLevel *string `json:"governance_level,omitempty"`
+
+	// Time range
+	CreatedAfter  *time.Time `json:"created_after,omitempty"`
+	CreatedBefore *time.Time `json:"created_before,omitempty"`
+
+	// Pagination
+	Limit  int `json:"limit,omitempty"`
+	Offset int `json:"offset,omitempty"`
+
+	// Sorting
+	SortBy    string `json:"sort_by,omitempty"`    // "created_at", "status", "amount"
+	SortOrder string `json:"sort_order,omitempty"` // "asc", "desc"
+}
+
+// IntentAuditResult is the paginated result for audit queries
+type IntentAuditResult struct {
+	Intents    []IntentSummary `json:"intents"`
+	TotalCount int             `json:"total_count"`
+	Limit      int             `json:"limit"`
+	Offset     int             `json:"offset"`
+	HasMore    bool            `json:"has_more"`
+}

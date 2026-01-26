@@ -2539,6 +2539,457 @@ func (r *ProofArtifactRepository) GetLastAnchorTime(ctx context.Context) (*time.
 	return &lastAnchor.Time, nil
 }
 
+// ============================================================================
+// TRANSACTION CENTER OPERATIONS
+// For web app Transaction Center integration
+// ============================================================================
+
+// GetProofByIntentID retrieves proof details by intent ID
+func (r *ProofArtifactRepository) GetProofByIntentID(ctx context.Context, intentID string) (*IntentProofDetails, error) {
+	// First, find the batch transaction by intent_id
+	btQuery := `
+		SELECT bt.batch_id, bt.accumulate_tx_hash, bt.account_url,
+			   bt.user_id, bt.intent_id, bt.from_chain, bt.to_chain,
+			   bt.from_address, bt.to_address, bt.amount, bt.token_symbol, bt.adi_url,
+			   bt.governance_level, bt.governance_valid, bt.chained_proof_valid,
+			   bt.created_at, bt.created_at_client,
+			   ab.status AS batch_status, ab.merkle_root AS batch_merkle_root,
+			   ab.transaction_count AS batch_tx_count,
+			   COALESCE(ab.quorum_reached, FALSE) AS batch_quorum_met
+		FROM batch_transactions bt
+		LEFT JOIN anchor_batches ab ON bt.batch_id = ab.batch_id
+		WHERE bt.intent_id = $1
+		LIMIT 1`
+
+	var details IntentProofDetails
+	var batchStatus sql.NullString
+	var batchMerkleRoot []byte
+	var batchTxCount sql.NullInt64
+	var batchQuorumMet bool
+
+	err := r.db.QueryRowContext(ctx, btQuery, intentID).Scan(
+		&details.BatchID, &details.AccumTxHash, &details.IntentSummary.AdiURL,
+		&details.UserID, &details.IntentID, &details.FromChain, &details.ToChain,
+		&details.FromAddress, &details.ToAddress, &details.Amount, &details.TokenSymbol, &details.AdiURL,
+		&details.GovernanceLevel, &details.GovernanceValid, &details.ChainedProofValid,
+		&details.CreatedAt, &details.CreatedAtClient,
+		&batchStatus, &batchMerkleRoot, &batchTxCount, &batchQuorumMet,
+	)
+
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to get batch transaction by intent: %w", err)
+	}
+
+	if batchStatus.Valid {
+		details.BatchStatus = &batchStatus.String
+	}
+	details.BatchMerkleRoot = batchMerkleRoot
+	if batchTxCount.Valid {
+		details.BatchTxCount = int(batchTxCount.Int64)
+	}
+	details.BatchQuorumMet = batchQuorumMet
+
+	// Get proof artifact if exists
+	proof, err := r.GetProofByTxHash(ctx, details.AccumTxHash)
+	if err != nil {
+		return nil, err
+	}
+	if proof != nil {
+		details.Proof = proof
+		details.ProofID = &proof.ProofID
+
+		// Get chained layers
+		layers, err := r.GetChainedProofLayers(ctx, proof.ProofID)
+		if err != nil {
+			return nil, err
+		}
+		details.ChainedLayers = layers
+
+		// Get governance levels
+		govLevels, err := r.GetGovernanceProofLevels(ctx, proof.ProofID)
+		if err != nil {
+			return nil, err
+		}
+		details.GovernanceLevels = govLevels
+
+		// Get anchor reference
+		anchorRef, err := r.GetAnchorReference(ctx, proof.ProofID)
+		if err != nil {
+			return nil, err
+		}
+		details.AnchorReference = anchorRef
+		if anchorRef != nil {
+			details.AnchorTxHash = &anchorRef.AnchorTxHash
+			details.AnchorConfirmations = anchorRef.Confirmations
+			details.AnchorIsFinal = anchorRef.IsConfirmed
+		}
+
+		// Get attestation count
+		attestations, err := r.GetProofAttestationsByProof(ctx, proof.ProofID)
+		if err != nil {
+			return nil, err
+		}
+		details.AttestationCount = len(attestations)
+
+		// Derive status
+		details.Status = string(proof.Status)
+	} else {
+		// Derive status from batch
+		if batchStatus.Valid {
+			details.Status = batchStatus.String
+		} else {
+			details.Status = "pending"
+		}
+	}
+
+	// Calculate current stage
+	details.CurrentStage = r.calculateIntentStage(details.BatchStatus, details.AnchorConfirmations, details.AnchorIsFinal, details.GovernanceLevel, details.Status)
+
+	return &details, nil
+}
+
+// GetTimelineByIntentID retrieves custody chain events for an intent
+func (r *ProofArtifactRepository) GetTimelineByIntentID(ctx context.Context, intentID string) ([]IntentTimelineEvent, error) {
+	query := `
+		SELECT cce.event_id, cce.proof_id, bt.intent_id, bt.accumulate_tx_hash,
+			   cce.event_type,
+			   COALESCE(cce.event_details->>'phase', cce.event_type) AS phase,
+			   COALESCE(cce.event_details->>'action', cce.event_type) AS action,
+			   COALESCE(cce.event_details->>'message', cce.event_type) AS message,
+			   cce.actor_type, cce.actor_id,
+			   cce.previous_hash, cce.current_hash,
+			   cce.event_details, cce.event_timestamp
+		FROM custody_chain_events cce
+		JOIN proof_artifacts pa ON cce.proof_id = pa.proof_id
+		JOIN batch_transactions bt ON pa.accum_tx_hash = bt.accumulate_tx_hash
+		WHERE bt.intent_id = $1
+		ORDER BY cce.event_timestamp ASC`
+
+	rows, err := r.db.QueryContext(ctx, query, intentID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query intent timeline: %w", err)
+	}
+	defer rows.Close()
+
+	var events []IntentTimelineEvent
+	for rows.Next() {
+		var e IntentTimelineEvent
+		if err := rows.Scan(
+			&e.EventID, &e.ProofID, &e.IntentID, &e.AccumTxHash,
+			&e.EventType, &e.Phase, &e.Action, &e.Message,
+			&e.ActorType, &e.ActorID,
+			&e.PreviousHash, &e.CurrentHash,
+			&e.Details, &e.Timestamp,
+		); err != nil {
+			return nil, fmt.Errorf("failed to scan timeline event: %w", err)
+		}
+		events = append(events, e)
+	}
+
+	return events, nil
+}
+
+// GetAttestationsByIntentID retrieves attestation summary for an intent
+func (r *ProofArtifactRepository) GetAttestationsByIntentID(ctx context.Context, intentID string) (*IntentAttestationSummary, error) {
+	// First get the proof ID
+	query := `
+		SELECT pa.proof_id, bt.accumulate_tx_hash
+		FROM batch_transactions bt
+		JOIN proof_artifacts pa ON bt.accumulate_tx_hash = pa.accum_tx_hash
+		WHERE bt.intent_id = $1
+		LIMIT 1`
+
+	var proofID uuid.UUID
+	var accumTxHash string
+	err := r.db.QueryRowContext(ctx, query, intentID).Scan(&proofID, &accumTxHash)
+	if err == sql.ErrNoRows {
+		return &IntentAttestationSummary{
+			IntentID:    intentID,
+			Ed25519Count: 0,
+			BLSCount:     0,
+			QuorumMet:    false,
+		}, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to get proof for intent: %w", err)
+	}
+
+	summary := &IntentAttestationSummary{
+		IntentID:    intentID,
+		AccumTxHash: accumTxHash,
+		ProofID:     &proofID,
+	}
+
+	// Get Ed25519 attestations
+	attestations, err := r.GetProofAttestationsByProof(ctx, proofID)
+	if err != nil {
+		return nil, err
+	}
+	summary.Ed25519Attestations = attestations
+	summary.Ed25519Count = len(attestations)
+
+	// For quorum calculation, assume 2/3+1 threshold
+	// This would typically come from validator set configuration
+	summary.QuorumRequired = 2 // Default - should be configurable
+	summary.QuorumAchieved = summary.Ed25519Count
+	summary.QuorumMet = summary.QuorumAchieved >= summary.QuorumRequired
+
+	return summary, nil
+}
+
+// GetIntentsByUserID retrieves all intents for a user (paginated)
+func (r *ProofArtifactRepository) GetIntentsByUserID(ctx context.Context, userID string, limit, offset int) ([]IntentSummary, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	if limit > 1000 {
+		limit = 1000
+	}
+
+	query := `
+		SELECT bt.intent_id, bt.user_id, bt.accumulate_tx_hash,
+			   bt.from_chain, bt.to_chain, bt.from_address, bt.to_address,
+			   bt.amount, bt.token_symbol, bt.adi_url,
+			   COALESCE(pa.status, ab.status, 'pending') AS status,
+			   bt.governance_level, bt.governance_valid, bt.chained_proof_valid,
+			   ar.anchor_tx_hash, COALESCE(ar.confirmations, 0) AS anchor_confirmations,
+			   COALESCE(ar.is_final, FALSE) AS anchor_is_final,
+			   pa.proof_id, bt.batch_id,
+			   bt.created_at, bt.created_at_client
+		FROM batch_transactions bt
+		LEFT JOIN anchor_batches ab ON bt.batch_id = ab.batch_id
+		LEFT JOIN anchor_records ar ON ab.batch_id = ar.batch_id
+		LEFT JOIN proof_artifacts pa ON bt.accumulate_tx_hash = pa.accum_tx_hash
+		WHERE bt.user_id = $1
+		ORDER BY bt.created_at DESC
+		LIMIT $2 OFFSET $3`
+
+	rows, err := r.db.QueryContext(ctx, query, userID, limit, offset)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query intents by user: %w", err)
+	}
+	defer rows.Close()
+
+	var summaries []IntentSummary
+	for rows.Next() {
+		var s IntentSummary
+		if err := rows.Scan(
+			&s.IntentID, &s.UserID, &s.AccumTxHash,
+			&s.FromChain, &s.ToChain, &s.FromAddress, &s.ToAddress,
+			&s.Amount, &s.TokenSymbol, &s.AdiURL,
+			&s.Status, &s.GovernanceLevel, &s.GovernanceValid, &s.ChainedProofValid,
+			&s.AnchorTxHash, &s.AnchorConfirmations, &s.AnchorIsFinal,
+			&s.ProofID, &s.BatchID,
+			&s.CreatedAt, &s.CreatedAtClient,
+		); err != nil {
+			return nil, fmt.Errorf("failed to scan intent summary: %w", err)
+		}
+		// Calculate stage
+		var govLevel *string
+		if s.GovernanceLevel != nil {
+			govLevel = s.GovernanceLevel
+		}
+		s.CurrentStage = r.calculateIntentStage(&s.Status, s.AnchorConfirmations, s.AnchorIsFinal, govLevel, s.Status)
+		summaries = append(summaries, s)
+	}
+
+	return summaries, nil
+}
+
+// SearchAuditTrail searches intents with filters for audit mode
+func (r *ProofArtifactRepository) SearchAuditTrail(ctx context.Context, filter *IntentFilter) (*IntentAuditResult, error) {
+	if filter == nil {
+		filter = &IntentFilter{Limit: 50}
+	}
+	if filter.Limit <= 0 {
+		filter.Limit = 50
+	}
+	if filter.Limit > 1000 {
+		filter.Limit = 1000
+	}
+
+	var conditions []string
+	var args []interface{}
+	argIndex := 1
+
+	// Build conditions
+	if filter.UserID != nil {
+		conditions = append(conditions, fmt.Sprintf("bt.user_id = $%d", argIndex))
+		args = append(args, *filter.UserID)
+		argIndex++
+	}
+	if filter.IntentID != nil {
+		conditions = append(conditions, fmt.Sprintf("bt.intent_id = $%d", argIndex))
+		args = append(args, *filter.IntentID)
+		argIndex++
+	}
+	if filter.FromChain != nil {
+		conditions = append(conditions, fmt.Sprintf("bt.from_chain = $%d", argIndex))
+		args = append(args, *filter.FromChain)
+		argIndex++
+	}
+	if filter.ToChain != nil {
+		conditions = append(conditions, fmt.Sprintf("bt.to_chain = $%d", argIndex))
+		args = append(args, *filter.ToChain)
+		argIndex++
+	}
+	if filter.TokenSymbol != nil {
+		conditions = append(conditions, fmt.Sprintf("bt.token_symbol = $%d", argIndex))
+		args = append(args, *filter.TokenSymbol)
+		argIndex++
+	}
+	if filter.AdiURL != nil {
+		conditions = append(conditions, fmt.Sprintf("bt.adi_url = $%d", argIndex))
+		args = append(args, *filter.AdiURL)
+		argIndex++
+	}
+	if filter.GovernanceLevel != nil {
+		conditions = append(conditions, fmt.Sprintf("bt.governance_level = $%d", argIndex))
+		args = append(args, *filter.GovernanceLevel)
+		argIndex++
+	}
+	if filter.CreatedAfter != nil {
+		conditions = append(conditions, fmt.Sprintf("bt.created_at >= $%d", argIndex))
+		args = append(args, *filter.CreatedAfter)
+		argIndex++
+	}
+	if filter.CreatedBefore != nil {
+		conditions = append(conditions, fmt.Sprintf("bt.created_at <= $%d", argIndex))
+		args = append(args, *filter.CreatedBefore)
+		argIndex++
+	}
+
+	// Require intent_id to be present (only return intent-linked transactions)
+	conditions = append(conditions, "bt.intent_id IS NOT NULL")
+
+	whereClause := ""
+	if len(conditions) > 0 {
+		whereClause = "WHERE " + strings.Join(conditions, " AND ")
+	}
+
+	// Sort order
+	sortOrder := "DESC"
+	if filter.SortOrder == "asc" {
+		sortOrder = "ASC"
+	}
+	sortBy := "bt.created_at"
+	if filter.SortBy == "status" {
+		sortBy = "COALESCE(pa.status, ab.status, 'pending')"
+	}
+
+	// Count total
+	countQuery := fmt.Sprintf(`
+		SELECT COUNT(*)
+		FROM batch_transactions bt
+		LEFT JOIN anchor_batches ab ON bt.batch_id = ab.batch_id
+		LEFT JOIN proof_artifacts pa ON bt.accumulate_tx_hash = pa.accum_tx_hash
+		%s`, whereClause)
+
+	var totalCount int
+	err := r.db.QueryRowContext(ctx, countQuery, args...).Scan(&totalCount)
+	if err != nil {
+		return nil, fmt.Errorf("failed to count audit results: %w", err)
+	}
+
+	// Get results
+	query := fmt.Sprintf(`
+		SELECT bt.intent_id, bt.user_id, bt.accumulate_tx_hash,
+			   bt.from_chain, bt.to_chain, bt.from_address, bt.to_address,
+			   bt.amount, bt.token_symbol, bt.adi_url,
+			   COALESCE(pa.status, ab.status, 'pending') AS status,
+			   bt.governance_level, bt.governance_valid, bt.chained_proof_valid,
+			   ar.anchor_tx_hash, COALESCE(ar.confirmations, 0) AS anchor_confirmations,
+			   COALESCE(ar.is_final, FALSE) AS anchor_is_final,
+			   pa.proof_id, bt.batch_id,
+			   bt.created_at, bt.created_at_client
+		FROM batch_transactions bt
+		LEFT JOIN anchor_batches ab ON bt.batch_id = ab.batch_id
+		LEFT JOIN anchor_records ar ON ab.batch_id = ar.batch_id
+		LEFT JOIN proof_artifacts pa ON bt.accumulate_tx_hash = pa.accum_tx_hash
+		%s
+		ORDER BY %s %s
+		LIMIT $%d OFFSET $%d`, whereClause, sortBy, sortOrder, argIndex, argIndex+1)
+
+	args = append(args, filter.Limit, filter.Offset)
+
+	rows, err := r.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query audit trail: %w", err)
+	}
+	defer rows.Close()
+
+	var summaries []IntentSummary
+	for rows.Next() {
+		var s IntentSummary
+		if err := rows.Scan(
+			&s.IntentID, &s.UserID, &s.AccumTxHash,
+			&s.FromChain, &s.ToChain, &s.FromAddress, &s.ToAddress,
+			&s.Amount, &s.TokenSymbol, &s.AdiURL,
+			&s.Status, &s.GovernanceLevel, &s.GovernanceValid, &s.ChainedProofValid,
+			&s.AnchorTxHash, &s.AnchorConfirmations, &s.AnchorIsFinal,
+			&s.ProofID, &s.BatchID,
+			&s.CreatedAt, &s.CreatedAtClient,
+		); err != nil {
+			return nil, fmt.Errorf("failed to scan audit result: %w", err)
+		}
+		var govLevel *string
+		if s.GovernanceLevel != nil {
+			govLevel = s.GovernanceLevel
+		}
+		s.CurrentStage = r.calculateIntentStage(&s.Status, s.AnchorConfirmations, s.AnchorIsFinal, govLevel, s.Status)
+		summaries = append(summaries, s)
+	}
+
+	return &IntentAuditResult{
+		Intents:    summaries,
+		TotalCount: totalCount,
+		Limit:      filter.Limit,
+		Offset:     filter.Offset,
+		HasMore:    filter.Offset+len(summaries) < totalCount,
+	}, nil
+}
+
+// calculateIntentStage maps proof status and governance level to UI stage number (1-9)
+func (r *ProofArtifactRepository) calculateIntentStage(batchStatus *string, anchorConfirmations int, anchorIsFinal bool, governanceLevel *string, proofStatus string) int {
+	// Stage 9: Fully verified with G2
+	if proofStatus == "verified" && governanceLevel != nil && *governanceLevel == "G2" {
+		return 9
+	}
+	// Stage 8: Verified with G1
+	if proofStatus == "verified" && governanceLevel != nil && *governanceLevel == "G1" {
+		return 8
+	}
+	// Stage 7: Verified with G0
+	if proofStatus == "verified" {
+		return 7
+	}
+	// Stage 6: Anchor finalized
+	if anchorIsFinal {
+		return 6
+	}
+	// Stage 5: Anchor confirming
+	if anchorConfirmations > 0 {
+		return 5
+	}
+	// Stage 4: Anchored
+	if proofStatus == "anchored" || (batchStatus != nil && *batchStatus == "anchored") {
+		return 4
+	}
+	// Stage 3: Anchoring
+	if batchStatus != nil && *batchStatus == "anchoring" {
+		return 3
+	}
+	// Stage 2: Batched
+	if batchStatus != nil && (*batchStatus == "pending" || *batchStatus == "closed") {
+		return 2
+	}
+	// Stage 1: Submitted
+	return 1
+}
+
 // Unused import fix
 var _ = hex.EncodeToString
 var _ = json.Marshal

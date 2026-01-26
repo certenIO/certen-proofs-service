@@ -77,6 +77,7 @@ func main() {
 		RateLimitPerMinute: cfg.RateLimitRequests,
 		MaxExportSize:      10000,
 	}, logger)
+	txCenterHandlers := server.NewTransactionCenterHandlers(repos, cfg.ValidatorID, logger)
 
 	// Set up HTTP router
 	mux := http.NewServeMux()
@@ -113,6 +114,11 @@ func main() {
 	// API v1 Bulk Export endpoints
 	mux.HandleFunc("/api/v1/proofs/bulk/export", bulkHandlers.HandleBulkExport)
 	mux.HandleFunc("/api/v1/proofs/bulk/export/", bulkHandlers.HandleGetExportStatus)
+
+	// API v1 Transaction Center endpoints (for web app integration)
+	mux.HandleFunc("/api/v1/intents/", txCenterHandlers.HandleIntentRouting)
+	mux.HandleFunc("/api/v1/user/", txCenterHandlers.HandleGetUserIntents)
+	mux.HandleFunc("/api/v1/audit/intents", txCenterHandlers.HandleSearchAuditTrail)
 
 	// API v1 Proof Detail endpoints (with sub-paths)
 	mux.HandleFunc("/api/v1/proofs/", func(w http.ResponseWriter, r *http.Request) {
