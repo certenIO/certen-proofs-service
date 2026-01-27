@@ -2525,6 +2525,22 @@ func (r *ProofArtifactRepository) CountProofsWithQuorum(ctx context.Context, quo
 	return count, nil
 }
 
+// CountProofsWithConfirmedAnchors returns the count of proofs with confirmed anchors in a time window
+func (r *ProofArtifactRepository) CountProofsWithConfirmedAnchors(ctx context.Context, start, end time.Time) (int, error) {
+	query := `
+		SELECT COUNT(DISTINCT pa.proof_id)
+		FROM proof_artifacts pa
+		INNER JOIN anchor_references ar ON pa.proof_id = ar.proof_id
+		WHERE ar.is_confirmed = TRUE
+		AND pa.created_at >= $1 AND pa.created_at < $2`
+	var count int
+	err := r.db.QueryRowContext(ctx, query, start, end).Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf("failed to count proofs with confirmed anchors: %w", err)
+	}
+	return count, nil
+}
+
 // GetLastAnchorTime returns the timestamp of the most recent anchor
 func (r *ProofArtifactRepository) GetLastAnchorTime(ctx context.Context) (*time.Time, error) {
 	query := `SELECT MAX(anchored_at) FROM proof_artifacts WHERE anchored_at IS NOT NULL`
