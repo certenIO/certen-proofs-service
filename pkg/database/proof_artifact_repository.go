@@ -89,7 +89,7 @@ func (r *ProofArtifactRepository) GetProofByID(ctx context.Context, proofID uuid
 			   COALESCE(pa.artifact_json, '{}'::jsonb) as artifact_json, pa.artifact_hash,
 			   bt.adi_url, bt.from_chain, bt.to_chain, bt.from_address, bt.to_address, bt.amount, bt.token_symbol
 		FROM proof_artifacts pa
-		LEFT JOIN batch_transactions bt ON bt.accumulate_tx_hash = pa.accum_tx_hash
+		LEFT JOIN batch_transactions bt ON bt.intent_id = pa.intent_id
 		WHERE pa.proof_id = $1`
 
 	var proof ProofArtifact
@@ -132,7 +132,7 @@ func (r *ProofArtifactRepository) GetProofByTxHash(ctx context.Context, txHash s
 			   COALESCE(pa.artifact_json, '{}'::jsonb) as artifact_json, pa.artifact_hash,
 			   bt.adi_url, bt.from_chain, bt.to_chain, bt.from_address, bt.to_address, bt.amount, bt.token_symbol
 		FROM proof_artifacts pa
-		LEFT JOIN batch_transactions bt ON bt.accumulate_tx_hash = pa.accum_tx_hash
+		LEFT JOIN batch_transactions bt ON bt.intent_id = pa.intent_id
 		WHERE pa.accum_tx_hash = $1`
 
 	var proof ProofArtifact
