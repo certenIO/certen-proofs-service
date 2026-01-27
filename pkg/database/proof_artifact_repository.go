@@ -79,24 +79,28 @@ func (r *ProofArtifactRepository) CreateProofArtifact(ctx context.Context, input
 	return &proof, nil
 }
 
-// GetProofByID retrieves a proof by its ID
+// GetProofByID retrieves a proof by its ID with transaction metadata from batch_transactions
 func (r *ProofArtifactRepository) GetProofByID(ctx context.Context, proofID uuid.UUID) (*ProofArtifact, error) {
 	query := `
-		SELECT proof_id, proof_type, proof_version, accum_tx_hash, account_url,
-			   batch_id, batch_position, anchor_id, anchor_tx_hash, anchor_block_number, anchor_chain,
-			   merkle_root, leaf_hash, leaf_index, gov_level, proof_class, validator_id,
-			   status, verification_status, created_at, anchored_at, verified_at,
-			   COALESCE(artifact_json, '{}'::jsonb) as artifact_json, artifact_hash
-		FROM proof_artifacts
-		WHERE proof_id = $1`
+		SELECT pa.proof_id, pa.proof_type, pa.proof_version, pa.accum_tx_hash, pa.account_url,
+			   pa.batch_id, pa.batch_position, pa.anchor_id, pa.anchor_tx_hash, pa.anchor_block_number, pa.anchor_chain,
+			   pa.merkle_root, pa.leaf_hash, pa.leaf_index, pa.gov_level, pa.proof_class, pa.validator_id,
+			   pa.status, pa.verification_status, pa.created_at, pa.anchored_at, pa.verified_at,
+			   COALESCE(pa.artifact_json, '{}'::jsonb) as artifact_json, pa.artifact_hash,
+			   bt.adi_url, bt.from_chain, bt.to_chain, bt.from_address, bt.to_address, bt.amount, bt.token_symbol
+		FROM proof_artifacts pa
+		LEFT JOIN batch_transactions bt ON bt.accumulate_tx_hash = pa.accum_tx_hash
+		WHERE pa.proof_id = $1`
 
 	var proof ProofArtifact
+	var adiURL, fromChain, toChain, fromAddress, toAddress, amount, tokenSymbol sql.NullString
 	err := r.db.QueryRowContext(ctx, query, proofID).Scan(
 		&proof.ProofID, &proof.ProofType, &proof.ProofVersion, &proof.AccumTxHash, &proof.AccountURL,
 		&proof.BatchID, &proof.BatchPosition, &proof.AnchorID, &proof.AnchorTxHash, &proof.AnchorBlockNumber, &proof.AnchorChain,
 		&proof.MerkleRoot, &proof.LeafHash, &proof.LeafIndex, &proof.GovLevel, &proof.ProofClass, &proof.ValidatorID,
 		&proof.Status, &proof.VerificationStatus, &proof.CreatedAt, &proof.AnchoredAt, &proof.VerifiedAt,
 		&proof.ArtifactJSON, &proof.ArtifactHash,
+		&adiURL, &fromChain, &toChain, &fromAddress, &toAddress, &amount, &tokenSymbol,
 	)
 
 	if err == sql.ErrNoRows {
@@ -106,27 +110,40 @@ func (r *ProofArtifactRepository) GetProofByID(ctx context.Context, proofID uuid
 		return nil, fmt.Errorf("failed to get proof: %w", err)
 	}
 
+	// Populate transaction metadata fields
+	proof.AdiURL = adiURL.String
+	proof.FromChain = fromChain.String
+	proof.ToChain = toChain.String
+	proof.FromAddress = fromAddress.String
+	proof.ToAddress = toAddress.String
+	proof.Amount = amount.String
+	proof.TokenSymbol = tokenSymbol.String
+
 	return &proof, nil
 }
 
-// GetProofByTxHash retrieves a proof by Accumulate transaction hash
+// GetProofByTxHash retrieves a proof by Accumulate transaction hash with transaction metadata
 func (r *ProofArtifactRepository) GetProofByTxHash(ctx context.Context, txHash string) (*ProofArtifact, error) {
 	query := `
-		SELECT proof_id, proof_type, proof_version, accum_tx_hash, account_url,
-			   batch_id, batch_position, anchor_id, anchor_tx_hash, anchor_block_number, anchor_chain,
-			   merkle_root, leaf_hash, leaf_index, gov_level, proof_class, validator_id,
-			   status, verification_status, created_at, anchored_at, verified_at,
-			   COALESCE(artifact_json, '{}'::jsonb) as artifact_json, artifact_hash
-		FROM proof_artifacts
-		WHERE accum_tx_hash = $1`
+		SELECT pa.proof_id, pa.proof_type, pa.proof_version, pa.accum_tx_hash, pa.account_url,
+			   pa.batch_id, pa.batch_position, pa.anchor_id, pa.anchor_tx_hash, pa.anchor_block_number, pa.anchor_chain,
+			   pa.merkle_root, pa.leaf_hash, pa.leaf_index, pa.gov_level, pa.proof_class, pa.validator_id,
+			   pa.status, pa.verification_status, pa.created_at, pa.anchored_at, pa.verified_at,
+			   COALESCE(pa.artifact_json, '{}'::jsonb) as artifact_json, pa.artifact_hash,
+			   bt.adi_url, bt.from_chain, bt.to_chain, bt.from_address, bt.to_address, bt.amount, bt.token_symbol
+		FROM proof_artifacts pa
+		LEFT JOIN batch_transactions bt ON bt.accumulate_tx_hash = pa.accum_tx_hash
+		WHERE pa.accum_tx_hash = $1`
 
 	var proof ProofArtifact
+	var adiURL, fromChain, toChain, fromAddress, toAddress, amount, tokenSymbol sql.NullString
 	err := r.db.QueryRowContext(ctx, query, txHash).Scan(
 		&proof.ProofID, &proof.ProofType, &proof.ProofVersion, &proof.AccumTxHash, &proof.AccountURL,
 		&proof.BatchID, &proof.BatchPosition, &proof.AnchorID, &proof.AnchorTxHash, &proof.AnchorBlockNumber, &proof.AnchorChain,
 		&proof.MerkleRoot, &proof.LeafHash, &proof.LeafIndex, &proof.GovLevel, &proof.ProofClass, &proof.ValidatorID,
 		&proof.Status, &proof.VerificationStatus, &proof.CreatedAt, &proof.AnchoredAt, &proof.VerifiedAt,
 		&proof.ArtifactJSON, &proof.ArtifactHash,
+		&adiURL, &fromChain, &toChain, &fromAddress, &toAddress, &amount, &tokenSymbol,
 	)
 
 	if err == sql.ErrNoRows {
@@ -135,6 +152,15 @@ func (r *ProofArtifactRepository) GetProofByTxHash(ctx context.Context, txHash s
 	if err != nil {
 		return nil, fmt.Errorf("failed to get proof by tx hash: %w", err)
 	}
+
+	// Populate transaction metadata fields
+	proof.AdiURL = adiURL.String
+	proof.FromChain = fromChain.String
+	proof.ToChain = toChain.String
+	proof.FromAddress = fromAddress.String
+	proof.ToAddress = toAddress.String
+	proof.Amount = amount.String
+	proof.TokenSymbol = tokenSymbol.String
 
 	return &proof, nil
 }

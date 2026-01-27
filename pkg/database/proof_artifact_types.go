@@ -106,6 +106,15 @@ type ProofArtifact struct {
 
 	// Computed
 	ArtifactHash []byte `json:"artifact_hash" db:"artifact_hash"`
+
+	// Transaction Metadata (populated from batch_transactions via JOIN)
+	AdiURL      string `json:"adi_url,omitempty"`
+	FromChain   string `json:"from_chain,omitempty"`
+	ToChain     string `json:"to_chain,omitempty"`
+	FromAddress string `json:"from_address,omitempty"`
+	ToAddress   string `json:"to_address,omitempty"`
+	Amount      string `json:"amount,omitempty"`
+	TokenSymbol string `json:"token_symbol,omitempty"`
 }
 
 // NewProofArtifact is used to create a new proof artifact
