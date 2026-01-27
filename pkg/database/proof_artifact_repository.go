@@ -3122,7 +3122,7 @@ func (r *ProofArtifactRepository) GetIntentsByUserID(ctx context.Context, userID
 	}
 
 	query := `
-		SELECT bt.intent_id, bt.user_id, bt.accumulate_tx_hash,
+		SELECT COALESCE(bt.intent_id, ''), COALESCE(bt.user_id, ''), COALESCE(bt.accumulate_tx_hash, ''),
 			   bt.from_chain, bt.to_chain, bt.from_address, bt.to_address,
 			   bt.amount, bt.token_symbol, bt.adi_url,
 			   COALESCE(pa.status, ab.status, 'pending') AS status,
@@ -3130,7 +3130,7 @@ func (r *ProofArtifactRepository) GetIntentsByUserID(ctx context.Context, userID
 			   ar.anchor_tx_hash, COALESCE(ar.confirmations, 0) AS anchor_confirmations,
 			   COALESCE(ar.is_final, FALSE) AS anchor_is_final,
 			   pa.proof_id, bt.batch_id,
-			   bt.created_at, bt.created_at_client
+			   COALESCE(bt.created_at, NOW()), bt.created_at_client
 		FROM batch_transactions bt
 		LEFT JOIN anchor_batches ab ON bt.batch_id = ab.id
 		LEFT JOIN anchor_records ar ON ab.id = ar.batch_id
@@ -3268,7 +3268,7 @@ func (r *ProofArtifactRepository) SearchAuditTrail(ctx context.Context, filter *
 
 	// Get results
 	query := fmt.Sprintf(`
-		SELECT bt.intent_id, bt.user_id, bt.accumulate_tx_hash,
+		SELECT COALESCE(bt.intent_id, ''), COALESCE(bt.user_id, ''), COALESCE(bt.accumulate_tx_hash, ''),
 			   bt.from_chain, bt.to_chain, bt.from_address, bt.to_address,
 			   bt.amount, bt.token_symbol, bt.adi_url,
 			   COALESCE(pa.status, ab.status, 'pending') AS status,
@@ -3276,7 +3276,7 @@ func (r *ProofArtifactRepository) SearchAuditTrail(ctx context.Context, filter *
 			   ar.anchor_tx_hash, COALESCE(ar.confirmations, 0) AS anchor_confirmations,
 			   COALESCE(ar.is_final, FALSE) AS anchor_is_final,
 			   pa.proof_id, bt.batch_id,
-			   bt.created_at, bt.created_at_client
+			   COALESCE(bt.created_at, NOW()), bt.created_at_client
 		FROM batch_transactions bt
 		LEFT JOIN anchor_batches ab ON bt.batch_id = ab.id
 		LEFT JOIN anchor_records ar ON ab.id = ar.batch_id
