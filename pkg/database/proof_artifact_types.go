@@ -497,17 +497,25 @@ type TransactionMetadata struct {
 	UserID       string `json:"user_id,omitempty"`
 }
 
-// ProofSummary is a lightweight proof listing
+// ProofSummary is a lightweight proof listing with transaction metadata
 type ProofSummary struct {
-	ProofID           uuid.UUID       `json:"proof_id"`
-	ProofType         ProofType       `json:"proof_type"`
-	AccumTxHash       string          `json:"accum_tx_hash"`
-	AccountURL        string          `json:"account_url"`
-	GovLevel          *GovernanceLevel `json:"gov_level,omitempty"`
-	Status            ProofStatus     `json:"status"`
-	CreatedAt         time.Time       `json:"created_at"`
-	AnchoredAt        *time.Time      `json:"anchored_at,omitempty"`
-	AttestationCount  int             `json:"attestation_count"`
+	ProofID          uuid.UUID        `json:"proof_id"`
+	ProofType        ProofType        `json:"proof_type"`
+	AccumTxHash      string           `json:"accum_tx_hash"`
+	AccountURL       string           `json:"account_url"`
+	GovLevel         *GovernanceLevel `json:"gov_level,omitempty"`
+	Status           ProofStatus      `json:"status"`
+	CreatedAt        time.Time        `json:"created_at"`
+	AnchoredAt       *time.Time       `json:"anchored_at,omitempty"`
+	AttestationCount int              `json:"attestation_count"`
+	// Transaction metadata from batch_transactions (for on-demand transactions)
+	AdiURL      *string `json:"adi_url,omitempty"`
+	FromChain   *string `json:"from_chain,omitempty"`
+	ToChain     *string `json:"to_chain,omitempty"`
+	FromAddress *string `json:"from_address,omitempty"`
+	ToAddress   *string `json:"to_address,omitempty"`
+	Amount      *string `json:"amount,omitempty"`
+	TokenSymbol *string `json:"token_symbol,omitempty"`
 }
 
 // BatchProofStats provides statistics for a batch

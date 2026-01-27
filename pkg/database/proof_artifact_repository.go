@@ -336,8 +336,10 @@ func (r *ProofArtifactRepository) QueryProofs(ctx context.Context, filter *Proof
 	query := fmt.Sprintf(`
 		SELECT pa.proof_id, pa.proof_type, pa.accum_tx_hash, pa.account_url,
 			   pa.gov_level, pa.status, pa.created_at, pa.anchored_at,
-			   COALESCE((SELECT COUNT(*) FROM validator_attestations va WHERE va.proof_id = pa.proof_id), 0) as attestation_count
+			   COALESCE((SELECT COUNT(*) FROM validator_attestations va WHERE va.proof_id = pa.proof_id), 0) as attestation_count,
+			   bt.adi_url, bt.from_chain, bt.to_chain, bt.from_address, bt.to_address, bt.amount, bt.token_symbol
 		FROM proof_artifacts pa
+		LEFT JOIN batch_transactions bt ON bt.intent_id = pa.accum_tx_hash
 		%s
 		ORDER BY pa.created_at DESC
 		LIMIT $%d OFFSET $%d`, whereClause, argIndex, argIndex+1)
@@ -353,12 +355,36 @@ func (r *ProofArtifactRepository) QueryProofs(ctx context.Context, filter *Proof
 	var summaries []ProofSummary
 	for rows.Next() {
 		var s ProofSummary
+		var adiURL, fromChain, toChain, fromAddr, toAddr, amount, tokenSymbol sql.NullString
 		if err := rows.Scan(
 			&s.ProofID, &s.ProofType, &s.AccumTxHash, &s.AccountURL,
 			&s.GovLevel, &s.Status, &s.CreatedAt, &s.AnchoredAt,
 			&s.AttestationCount,
+			&adiURL, &fromChain, &toChain, &fromAddr, &toAddr, &amount, &tokenSymbol,
 		); err != nil {
 			return nil, fmt.Errorf("failed to scan proof summary: %w", err)
+		}
+		// Set transaction metadata if available
+		if adiURL.Valid && adiURL.String != "" {
+			s.AdiURL = &adiURL.String
+		}
+		if fromChain.Valid && fromChain.String != "" {
+			s.FromChain = &fromChain.String
+		}
+		if toChain.Valid && toChain.String != "" {
+			s.ToChain = &toChain.String
+		}
+		if fromAddr.Valid && fromAddr.String != "" {
+			s.FromAddress = &fromAddr.String
+		}
+		if toAddr.Valid && toAddr.String != "" {
+			s.ToAddress = &toAddr.String
+		}
+		if amount.Valid && amount.String != "" {
+			s.Amount = &amount.String
+		}
+		if tokenSymbol.Valid && tokenSymbol.String != "" {
+			s.TokenSymbol = &tokenSymbol.String
 		}
 		summaries = append(summaries, s)
 	}
