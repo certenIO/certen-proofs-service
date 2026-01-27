@@ -2541,6 +2541,55 @@ func (r *ProofArtifactRepository) CountProofsWithConfirmedAnchors(ctx context.Co
 	return count, nil
 }
 
+// CountProofsWithGovernanceLevels returns the count of proofs that have governance proof levels (G0/G1/G2)
+func (r *ProofArtifactRepository) CountProofsWithGovernanceLevels(ctx context.Context) (int, error) {
+	query := `SELECT COUNT(DISTINCT proof_id) FROM governance_proof_levels`
+	var count int
+	err := r.db.QueryRowContext(ctx, query).Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf("failed to count proofs with governance levels: %w", err)
+	}
+	return count, nil
+}
+
+// CountProofsWithChainedLayers returns the count of proofs that have chained proof layers (L1/L2/L3)
+func (r *ProofArtifactRepository) CountProofsWithChainedLayers(ctx context.Context) (int, error) {
+	query := `SELECT COUNT(DISTINCT proof_id) FROM chained_proof_layers`
+	var count int
+	err := r.db.QueryRowContext(ctx, query).Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf("failed to count proofs with chained layers: %w", err)
+	}
+	return count, nil
+}
+
+// CountProofsWithAnchors returns the count of proofs that have anchor references
+func (r *ProofArtifactRepository) CountProofsWithAnchors(ctx context.Context) (int, error) {
+	query := `SELECT COUNT(DISTINCT proof_id) FROM anchor_references`
+	var count int
+	err := r.db.QueryRowContext(ctx, query).Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf("failed to count proofs with anchors: %w", err)
+	}
+	return count, nil
+}
+
+// CountCompletedProofs returns the count of proofs that are considered complete
+// (have confirmed anchors, which means the proof cycle finished successfully)
+func (r *ProofArtifactRepository) CountCompletedProofs(ctx context.Context) (int, error) {
+	query := `
+		SELECT COUNT(DISTINCT pa.proof_id)
+		FROM proof_artifacts pa
+		INNER JOIN anchor_references ar ON pa.proof_id = ar.proof_id
+		WHERE ar.is_confirmed = TRUE`
+	var count int
+	err := r.db.QueryRowContext(ctx, query).Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf("failed to count completed proofs: %w", err)
+	}
+	return count, nil
+}
+
 // GetLastAnchorTime returns the timestamp of the most recent anchor
 func (r *ProofArtifactRepository) GetLastAnchorTime(ctx context.Context) (*time.Time, error) {
 	query := `SELECT MAX(anchored_at) FROM proof_artifacts WHERE anchored_at IS NOT NULL`

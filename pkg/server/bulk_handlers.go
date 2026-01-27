@@ -465,39 +465,43 @@ func (h *BulkHandlers) HandleGetProofStats(w http.ResponseWriter, r *http.Reques
 	// Get total counts
 	totalProofs, _ := h.repos.ProofArtifacts.CountProofs(ctx, nil)
 
-	// Get proofs by status
+	// Get proofs by status - only show meaningful workflow statuses
 	proofsByStatus := make(map[string]int64)
-	for _, status := range []database.ProofStatus{
-		database.ProofStatusPending,
-		database.ProofStatusBatched,
-		database.ProofStatusAnchored,
-		database.ProofStatusAttested,
-		database.ProofStatusVerified,
-		database.ProofStatusFailed,
-	} {
-		statusCopy := status
-		count, _ := h.repos.ProofArtifacts.CountProofs(ctx, &database.ProofArtifactFilter{Status: &statusCopy})
-		proofsByStatus[string(status)] = int64(count)
-	}
 
-	// Get proofs by type - include all actual proof types
+	// Pending: proofs waiting to be processed
+	pendingStatus := database.ProofStatusPending
+	pendingCount, _ := h.repos.ProofArtifacts.CountProofs(ctx, &database.ProofArtifactFilter{Status: &pendingStatus})
+	proofsByStatus["pending"] = int64(pendingCount)
+
+	// Batched: proofs grouped into a batch
+	batchedStatus := database.ProofStatusBatched
+	batchedCount, _ := h.repos.ProofArtifacts.CountProofs(ctx, &database.ProofArtifactFilter{Status: &batchedStatus})
+	proofsByStatus["batched"] = int64(batchedCount)
+
+	// Failed: proofs that encountered errors
+	failedStatus := database.ProofStatusFailed
+	failedCount, _ := h.repos.ProofArtifacts.CountProofs(ctx, &database.ProofArtifactFilter{Status: &failedStatus})
+	proofsByStatus["failed"] = int64(failedCount)
+
+	// Complete: proofs with confirmed anchors (successful proof cycle)
+	completeCount, _ := h.repos.ProofArtifacts.CountCompletedProofs(ctx)
+	proofsByStatus["complete"] = int64(completeCount)
+
+	// Get proofs by type - count by related table entries, not proof_type column
+	// These represent proofs that have the actual proof data
 	proofsByType := make(map[string]int64)
-	for _, proofType := range []database.ProofType{
-		database.ProofTypeCertenAnchor, // Most common - anchor proofs
-		database.ProofTypeChained,
-		database.ProofTypeGovernance,
-		database.ProofTypeMerkle,
-	} {
-		typeCopy := proofType
-		count, _ := h.repos.ProofArtifacts.CountProofs(ctx, &database.ProofArtifactFilter{ProofType: &typeCopy})
-		// Use user-friendly names
-		displayName := string(proofType)
-		switch proofType {
-		case database.ProofTypeCertenAnchor:
-			displayName = "anchor"
-		}
-		proofsByType[displayName] = int64(count)
-	}
+
+	// Merkle: proofs with L1/L2/L3 chained proof layers
+	merkleCount, _ := h.repos.ProofArtifacts.CountProofsWithChainedLayers(ctx)
+	proofsByType["merkle"] = int64(merkleCount)
+
+	// Governance: proofs with G0/G1/G2 governance levels
+	govCount, _ := h.repos.ProofArtifacts.CountProofsWithGovernanceLevels(ctx)
+	proofsByType["governance"] = int64(govCount)
+
+	// Anchor: proofs with external chain anchors
+	anchorCount, _ := h.repos.ProofArtifacts.CountProofsWithAnchors(ctx)
+	proofsByType["anchor"] = int64(anchorCount)
 
 	// Get proofs by governance level with user-friendly names
 	// Note: These are Accumulate-side governance proofs for the intent transaction
