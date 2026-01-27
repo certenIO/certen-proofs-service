@@ -474,11 +474,27 @@ type ProofArtifactFilter struct {
 // ProofArtifactWithDetails includes related records
 type ProofArtifactWithDetails struct {
 	ProofArtifact
-	ChainedLayers    []ChainedProofLayer       `json:"chained_layers,omitempty"`
-	GovernanceLevels []GovernanceProofLevel    `json:"governance_levels,omitempty"`
-	Attestations     []ProofAttestation        `json:"attestations,omitempty"`
-	AnchorReference  *AnchorReferenceRecord    `json:"anchor_reference,omitempty"`
-	Verifications    []ProofVerificationRecord `json:"verifications,omitempty"`
+	ChainedLayers       []ChainedProofLayer       `json:"chained_layers,omitempty"`
+	GovernanceLevels    []GovernanceProofLevel    `json:"governance_levels,omitempty"`
+	Attestations        []ProofAttestation        `json:"attestations,omitempty"`
+	AnchorReference     *AnchorReferenceRecord    `json:"anchor_reference,omitempty"`
+	Verifications       []ProofVerificationRecord `json:"verifications,omitempty"`
+	TransactionMetadata *TransactionMetadata      `json:"transaction_metadata,omitempty"`
+}
+
+// TransactionMetadata contains transaction details from batch_transactions
+// Available for on-demand transactions; may be nil for on-cadence proofs
+type TransactionMetadata struct {
+	IntentID     string `json:"intent_id,omitempty"`
+	AdiURL       string `json:"adi_url,omitempty"`
+	FromChain    string `json:"from_chain,omitempty"`
+	ToChain      string `json:"to_chain,omitempty"`
+	FromAddress  string `json:"from_address,omitempty"`
+	ToAddress    string `json:"to_address,omitempty"`
+	Amount       string `json:"amount,omitempty"`
+	TokenSymbol  string `json:"token_symbol,omitempty"`
+	IntentType   string `json:"intent_type,omitempty"`
+	UserID       string `json:"user_id,omitempty"`
 }
 
 // ProofSummary is a lightweight proof listing

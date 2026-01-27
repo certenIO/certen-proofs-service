@@ -815,7 +815,88 @@ func (r *ProofArtifactRepository) GetProofWithDetails(ctx context.Context, proof
 	}
 	result.Verifications = verifications
 
+	// Get transaction metadata from batch_transactions (for on-demand transactions)
+	// Pass nil for intentID since ProofArtifact doesn't store it - lookup by tx hash instead
+	txMetadata, err := r.GetTransactionMetadata(ctx, proof.AccumTxHash, nil)
+	if err == nil {
+		result.TransactionMetadata = txMetadata
+	}
+	// Note: Error is ignored - transaction metadata is optional (on-cadence may not have it)
+
 	return result, nil
+}
+
+// GetTransactionMetadata retrieves transaction details from batch_transactions
+func (r *ProofArtifactRepository) GetTransactionMetadata(ctx context.Context, accumTxHash string, intentID *string) (*TransactionMetadata, error) {
+	// Try to find by intent_id first, then by tx_hash
+	var query string
+	var args []interface{}
+
+	if intentID != nil && *intentID != "" {
+		query = `
+			SELECT intent_id, adi_url, from_chain, to_chain, from_address, to_address,
+			       amount, token_symbol, intent_type, user_id
+			FROM batch_transactions
+			WHERE intent_id = $1
+			LIMIT 1`
+		args = []interface{}{*intentID}
+	} else {
+		query = `
+			SELECT intent_id, adi_url, from_chain, to_chain, from_address, to_address,
+			       amount, token_symbol, intent_type, user_id
+			FROM batch_transactions
+			WHERE accumulate_tx_hash = $1
+			LIMIT 1`
+		args = []interface{}{accumTxHash}
+	}
+
+	var meta TransactionMetadata
+	var intentIDVal, adiURL, fromChain, toChain, fromAddr, toAddr, amount, tokenSymbol, intentType, userID sql.NullString
+
+	err := r.db.QueryRowContext(ctx, query, args...).Scan(
+		&intentIDVal, &adiURL, &fromChain, &toChain, &fromAddr, &toAddr,
+		&amount, &tokenSymbol, &intentType, &userID,
+	)
+
+	if err == sql.ErrNoRows {
+		return nil, nil // No metadata available (on-cadence transaction)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to get transaction metadata: %w", err)
+	}
+
+	if intentIDVal.Valid {
+		meta.IntentID = intentIDVal.String
+	}
+	if adiURL.Valid {
+		meta.AdiURL = adiURL.String
+	}
+	if fromChain.Valid {
+		meta.FromChain = fromChain.String
+	}
+	if toChain.Valid {
+		meta.ToChain = toChain.String
+	}
+	if fromAddr.Valid {
+		meta.FromAddress = fromAddr.String
+	}
+	if toAddr.Valid {
+		meta.ToAddress = toAddr.String
+	}
+	if amount.Valid {
+		meta.Amount = amount.String
+	}
+	if tokenSymbol.Valid {
+		meta.TokenSymbol = tokenSymbol.String
+	}
+	if intentType.Valid {
+		meta.IntentType = intentType.String
+	}
+	if userID.Valid {
+		meta.UserID = userID.String
+	}
+
+	return &meta, nil
 }
 
 // GetAnchorReference retrieves anchor reference for a proof
@@ -2631,6 +2712,7 @@ func (r *ProofArtifactRepository) GetProofByIntentID(ctx context.Context, intent
 	var batchMerkleRoot []byte
 	var batchTxCount sql.NullInt64
 	var batchQuorumMet bool
+	var foundViaBatchTx bool
 
 	err := r.db.QueryRowContext(ctx, btQuery, intentID).Scan(
 		&details.BatchID, &details.AccumTxHash, &details.IntentSummary.AdiURL,
@@ -2642,29 +2724,65 @@ func (r *ProofArtifactRepository) GetProofByIntentID(ctx context.Context, intent
 	)
 
 	if err == sql.ErrNoRows {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, fmt.Errorf("failed to get batch transaction by intent: %w", err)
-	}
+		// Fallback: Try to look up directly by proof_id (for on-cadence transactions)
+		proofUUID, parseErr := uuid.Parse(intentID)
+		if parseErr != nil {
+			// Not a valid UUID, not found
+			return nil, nil
+		}
 
-	if batchStatus.Valid {
-		details.BatchStatus = &batchStatus.String
-	}
-	details.BatchMerkleRoot = batchMerkleRoot
-	if batchTxCount.Valid {
-		details.BatchTxCount = int(batchTxCount.Int64)
-	}
-	details.BatchQuorumMet = batchQuorumMet
+		// Look up proof directly by proof_id
+		proof, proofErr := r.GetProofByID(ctx, proofUUID)
+		if proofErr != nil {
+			return nil, proofErr
+		}
+		if proof == nil {
+			return nil, nil
+		}
 
-	// Get proof artifact if exists
-	proof, err := r.GetProofByTxHash(ctx, details.AccumTxHash)
-	if err != nil {
-		return nil, err
-	}
-	if proof != nil {
-		details.Proof = proof
+		// Build IntentProofDetails from proof artifact
+		details.IntentID = intentID
+		details.AccumTxHash = proof.AccumTxHash
 		details.ProofID = &proof.ProofID
+		details.Proof = proof
+		details.Status = string(proof.Status)
+		details.CreatedAt = proof.CreatedAt
+		if proof.GovLevel != nil {
+			govLevel := string(*proof.GovLevel)
+			details.GovernanceLevel = &govLevel
+		}
+		foundViaBatchTx = false
+	} else if err != nil {
+		return nil, fmt.Errorf("failed to get batch transaction by intent: %w", err)
+	} else {
+		foundViaBatchTx = true
+	}
+
+	// Only process batch-related fields if we found via batch_transactions
+	if foundViaBatchTx {
+		if batchStatus.Valid {
+			details.BatchStatus = &batchStatus.String
+		}
+		details.BatchMerkleRoot = batchMerkleRoot
+		if batchTxCount.Valid {
+			details.BatchTxCount = int(batchTxCount.Int64)
+		}
+		details.BatchQuorumMet = batchQuorumMet
+
+		// Get proof artifact if exists
+		proof, err := r.GetProofByTxHash(ctx, details.AccumTxHash)
+		if err != nil {
+			return nil, err
+		}
+		if proof != nil {
+			details.Proof = proof
+			details.ProofID = &proof.ProofID
+		}
+	}
+
+	// Get additional proof details if we have a proof
+	if details.Proof != nil {
+		proof := details.Proof
 
 		// Get chained layers
 		layers, err := r.GetChainedProofLayers(ctx, proof.ProofID)
@@ -2701,8 +2819,22 @@ func (r *ProofArtifactRepository) GetProofByIntentID(ctx context.Context, intent
 
 		// Derive status
 		details.Status = string(proof.Status)
-	} else {
-		// Derive status from batch
+
+		// Try to get transaction metadata if not found via batch_transactions
+		if !foundViaBatchTx {
+			txMeta, err := r.GetTransactionMetadata(ctx, proof.AccumTxHash, nil)
+			if err == nil && txMeta != nil {
+				details.AdiURL = &txMeta.AdiURL
+				details.FromChain = &txMeta.FromChain
+				details.ToChain = &txMeta.ToChain
+				details.FromAddress = &txMeta.FromAddress
+				details.ToAddress = &txMeta.ToAddress
+				details.Amount = &txMeta.Amount
+				details.TokenSymbol = &txMeta.TokenSymbol
+			}
+		}
+	} else if foundViaBatchTx {
+		// Derive status from batch (only if we found via batch_transactions)
 		if batchStatus.Valid {
 			details.Status = batchStatus.String
 		} else {
@@ -2717,7 +2849,10 @@ func (r *ProofArtifactRepository) GetProofByIntentID(ctx context.Context, intent
 }
 
 // GetTimelineByIntentID retrieves custody chain events for an intent
+// It first tries to look up by intent_id in batch_transactions, then falls back
+// to looking up directly by proof_id (for on-cadence transactions without batch_transactions)
 func (r *ProofArtifactRepository) GetTimelineByIntentID(ctx context.Context, intentID string) ([]IntentTimelineEvent, error) {
+	// First try: Look up via batch_transactions (for on-demand transactions)
 	query := `
 		SELECT cce.event_id, cce.proof_id, bt.intent_id, bt.accumulate_tx_hash,
 			   cce.event_type,
@@ -2754,12 +2889,62 @@ func (r *ProofArtifactRepository) GetTimelineByIntentID(ctx context.Context, int
 		events = append(events, e)
 	}
 
+	// If we found events via batch_transactions, return them
+	if len(events) > 0 {
+		return events, nil
+	}
+
+	// Fallback: Try to look up directly by proof_id (for on-cadence transactions)
+	// The intentID might actually be a proof_id UUID
+	proofUUID, err := uuid.Parse(intentID)
+	if err != nil {
+		// Not a valid UUID, return empty results
+		return events, nil
+	}
+
+	// Query custody events directly by proof_id
+	directQuery := `
+		SELECT cce.event_id, cce.proof_id, $1::text AS intent_id, pa.accum_tx_hash,
+			   cce.event_type,
+			   COALESCE(cce.event_details->>'phase', cce.event_type) AS phase,
+			   COALESCE(cce.event_details->>'action', cce.event_type) AS action,
+			   COALESCE(cce.event_details->>'message', cce.event_type) AS message,
+			   cce.actor_type, cce.actor_id,
+			   cce.previous_hash, cce.current_hash,
+			   cce.event_details, cce.event_timestamp
+		FROM custody_chain_events cce
+		JOIN proof_artifacts pa ON cce.proof_id = pa.proof_id
+		WHERE cce.proof_id = $2
+		ORDER BY cce.event_timestamp ASC`
+
+	rows2, err := r.db.QueryContext(ctx, directQuery, intentID, proofUUID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query timeline by proof_id: %w", err)
+	}
+	defer rows2.Close()
+
+	for rows2.Next() {
+		var e IntentTimelineEvent
+		if err := rows2.Scan(
+			&e.EventID, &e.ProofID, &e.IntentID, &e.AccumTxHash,
+			&e.EventType, &e.Phase, &e.Action, &e.Message,
+			&e.ActorType, &e.ActorID,
+			&e.PreviousHash, &e.CurrentHash,
+			&e.Details, &e.Timestamp,
+		); err != nil {
+			return nil, fmt.Errorf("failed to scan timeline event: %w", err)
+		}
+		events = append(events, e)
+	}
+
 	return events, nil
 }
 
 // GetAttestationsByIntentID retrieves attestation summary for an intent
+// It first tries to look up by intent_id in batch_transactions, then falls back
+// to looking up directly by proof_id (for on-cadence transactions without batch_transactions)
 func (r *ProofArtifactRepository) GetAttestationsByIntentID(ctx context.Context, intentID string) (*IntentAttestationSummary, error) {
-	// First get the proof ID
+	// First get the proof ID via batch_transactions
 	query := `
 		SELECT pa.proof_id, bt.accumulate_tx_hash
 		FROM batch_transactions bt
@@ -2771,14 +2956,33 @@ func (r *ProofArtifactRepository) GetAttestationsByIntentID(ctx context.Context,
 	var accumTxHash string
 	err := r.db.QueryRowContext(ctx, query, intentID).Scan(&proofID, &accumTxHash)
 	if err == sql.ErrNoRows {
-		return &IntentAttestationSummary{
-			IntentID:    intentID,
-			Ed25519Count: 0,
-			BLSCount:     0,
-			QuorumMet:    false,
-		}, nil
-	}
-	if err != nil {
+		// Fallback: Try to look up directly by proof_id (for on-cadence transactions)
+		proofUUID, parseErr := uuid.Parse(intentID)
+		if parseErr != nil {
+			// Not a valid UUID, return empty summary
+			return &IntentAttestationSummary{
+				IntentID:     intentID,
+				Ed25519Count: 0,
+				BLSCount:     0,
+				QuorumMet:    false,
+			}, nil
+		}
+
+		// Query directly by proof_id
+		directQuery := `SELECT proof_id, accum_tx_hash FROM proof_artifacts WHERE proof_id = $1 LIMIT 1`
+		err = r.db.QueryRowContext(ctx, directQuery, proofUUID).Scan(&proofID, &accumTxHash)
+		if err == sql.ErrNoRows {
+			return &IntentAttestationSummary{
+				IntentID:     intentID,
+				Ed25519Count: 0,
+				BLSCount:     0,
+				QuorumMet:    false,
+			}, nil
+		}
+		if err != nil {
+			return nil, fmt.Errorf("failed to get proof by proof_id: %w", err)
+		}
+	} else if err != nil {
 		return nil, fmt.Errorf("failed to get proof for intent: %w", err)
 	}
 
