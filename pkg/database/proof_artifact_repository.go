@@ -3350,19 +3350,22 @@ func (r *ProofArtifactRepository) SearchAuditTrail(ctx context.Context, filter *
 
 // calculateIntentStage maps proof status and governance level to UI stage number (1-9)
 func (r *ProofArtifactRepository) calculateIntentStage(batchStatus *string, anchorConfirmations int, anchorIsFinal bool, governanceLevel *string, proofStatus string) int {
-	// Stage 9: Fully verified with G2
-	if proofStatus == "verified" && governanceLevel != nil && *governanceLevel == "G2" {
+	// Check for verified/anchored with governance - these indicate completion
+	isVerifiedOrAnchored := proofStatus == "verified" || proofStatus == "anchored"
+
+	// Stage 9: Fully verified/anchored with G2 and anchor finalized
+	if isVerifiedOrAnchored && governanceLevel != nil && *governanceLevel == "G2" && anchorIsFinal {
 		return 9
 	}
-	// Stage 8: Verified with G1
-	if proofStatus == "verified" && governanceLevel != nil && *governanceLevel == "G1" {
+	// Stage 8: Verified/anchored with G1 and anchor finalized
+	if isVerifiedOrAnchored && governanceLevel != nil && *governanceLevel == "G1" && anchorIsFinal {
 		return 8
 	}
-	// Stage 7: Verified with G0
-	if proofStatus == "verified" {
+	// Stage 7: Verified/anchored with G0 and anchor finalized
+	if isVerifiedOrAnchored && governanceLevel != nil && *governanceLevel == "G0" && anchorIsFinal {
 		return 7
 	}
-	// Stage 6: Anchor finalized
+	// Stage 6: Anchor finalized (no governance yet or governance in progress)
 	if anchorIsFinal {
 		return 6
 	}
@@ -3370,7 +3373,7 @@ func (r *ProofArtifactRepository) calculateIntentStage(batchStatus *string, anch
 	if anchorConfirmations > 0 {
 		return 5
 	}
-	// Stage 4: Anchored
+	// Stage 4: Anchored (proof exists but anchor not confirmed yet)
 	if proofStatus == "anchored" || (batchStatus != nil && *batchStatus == "anchored") {
 		return 4
 	}
