@@ -89,7 +89,7 @@ func (r *ProofArtifactRepository) GetProofByID(ctx context.Context, proofID uuid
 			   COALESCE(pa.artifact_json, '{}'::jsonb) as artifact_json, pa.artifact_hash,
 			   bt.adi_url, bt.from_chain, bt.to_chain, bt.from_address, bt.to_address, bt.amount, bt.token_symbol
 		FROM proof_artifacts pa
-		LEFT JOIN batch_transactions bt ON bt.intent_id = pa.intent_id
+		LEFT JOIN batch_transactions bt ON bt.accumulate_tx_hash = pa.accum_tx_hash
 		WHERE pa.proof_id = $1`
 
 	var proof ProofArtifact
@@ -132,7 +132,7 @@ func (r *ProofArtifactRepository) GetProofByTxHash(ctx context.Context, txHash s
 			   COALESCE(pa.artifact_json, '{}'::jsonb) as artifact_json, pa.artifact_hash,
 			   bt.adi_url, bt.from_chain, bt.to_chain, bt.from_address, bt.to_address, bt.amount, bt.token_symbol
 		FROM proof_artifacts pa
-		LEFT JOIN batch_transactions bt ON bt.intent_id = pa.intent_id
+		LEFT JOIN batch_transactions bt ON bt.accumulate_tx_hash = pa.accum_tx_hash
 		WHERE pa.accum_tx_hash = $1`
 
 	var proof ProofArtifact
@@ -365,7 +365,7 @@ func (r *ProofArtifactRepository) QueryProofs(ctx context.Context, filter *Proof
 			   COALESCE((SELECT COUNT(*) FROM validator_attestations va WHERE va.proof_id = pa.proof_id), 0) as attestation_count,
 			   bt.adi_url, bt.from_chain, bt.to_chain, bt.from_address, bt.to_address, bt.amount, bt.token_symbol
 		FROM proof_artifacts pa
-		LEFT JOIN batch_transactions bt ON bt.intent_id = pa.intent_id
+		LEFT JOIN batch_transactions bt ON bt.accumulate_tx_hash = pa.accum_tx_hash
 		%s
 		ORDER BY pa.created_at DESC
 		LIMIT $%d OFFSET $%d`, whereClause, argIndex, argIndex+1)
@@ -2759,7 +2759,7 @@ func (r *ProofArtifactRepository) GetProofByIntentID(ctx context.Context, intent
 			   ar.anchor_tx_hash, COALESCE(ar.confirmations, 0), COALESCE(ar.is_final, FALSE)
 		FROM batch_transactions bt
 		LEFT JOIN anchor_batches ab ON bt.batch_id = ab.id
-		LEFT JOIN proof_artifacts pa ON bt.intent_id = pa.intent_id
+		LEFT JOIN proof_artifacts pa ON bt.accumulate_tx_hash = pa.accum_tx_hash
 		LEFT JOIN anchor_records ar ON ab.id = ar.batch_id
 		WHERE bt.intent_id = $1
 		ORDER BY pa.created_at DESC NULLS LAST
@@ -2935,7 +2935,7 @@ func (r *ProofArtifactRepository) GetTimelineByIntentID(ctx context.Context, int
 			   pa.status, pa.created_at, pa.anchored_at, pa.verified_at,
 			   ab.status AS batch_status, ab.anchored_at AS batch_anchored_at, ab.confirmed_at
 		FROM batch_transactions bt
-		JOIN proof_artifacts pa ON bt.intent_id = pa.intent_id
+		JOIN proof_artifacts pa ON bt.accumulate_tx_hash = pa.accum_tx_hash
 		LEFT JOIN anchor_batches ab ON bt.batch_id = ab.id
 		WHERE bt.intent_id = $1
 		LIMIT 1`
@@ -3075,7 +3075,7 @@ func (r *ProofArtifactRepository) GetAttestationsByIntentID(ctx context.Context,
 	query := `
 		SELECT pa.proof_id, bt.accumulate_tx_hash
 		FROM batch_transactions bt
-		JOIN proof_artifacts pa ON bt.intent_id = pa.intent_id
+		JOIN proof_artifacts pa ON bt.accumulate_tx_hash = pa.accum_tx_hash
 		WHERE bt.intent_id = $1
 		LIMIT 1`
 
@@ -3158,7 +3158,7 @@ func (r *ProofArtifactRepository) GetIntentsByUserID(ctx context.Context, userID
 		FROM batch_transactions bt
 		LEFT JOIN anchor_batches ab ON bt.batch_id = ab.id
 		LEFT JOIN anchor_records ar ON ab.id = ar.batch_id
-		LEFT JOIN proof_artifacts pa ON bt.intent_id = pa.intent_id
+		LEFT JOIN proof_artifacts pa ON bt.accumulate_tx_hash = pa.accum_tx_hash
 		WHERE bt.user_id = $1
 		ORDER BY bt.created_at DESC
 		LIMIT $2 OFFSET $3`
@@ -3281,7 +3281,7 @@ func (r *ProofArtifactRepository) SearchAuditTrail(ctx context.Context, filter *
 		SELECT COUNT(*)
 		FROM batch_transactions bt
 		LEFT JOIN anchor_batches ab ON bt.batch_id = ab.id
-		LEFT JOIN proof_artifacts pa ON bt.intent_id = pa.intent_id
+		LEFT JOIN proof_artifacts pa ON bt.accumulate_tx_hash = pa.accum_tx_hash
 		%s`, whereClause)
 
 	var totalCount int
@@ -3304,7 +3304,7 @@ func (r *ProofArtifactRepository) SearchAuditTrail(ctx context.Context, filter *
 		FROM batch_transactions bt
 		LEFT JOIN anchor_batches ab ON bt.batch_id = ab.id
 		LEFT JOIN anchor_records ar ON ab.id = ar.batch_id
-		LEFT JOIN proof_artifacts pa ON bt.intent_id = pa.intent_id
+		LEFT JOIN proof_artifacts pa ON bt.accumulate_tx_hash = pa.accum_tx_hash
 		%s
 		ORDER BY %s %s
 		LIMIT $%d OFFSET $%d`, whereClause, sortBy, sortOrder, argIndex, argIndex+1)
