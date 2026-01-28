@@ -2744,19 +2744,25 @@ func (r *ProofArtifactRepository) GetLastAnchorTime(ctx context.Context) (*time.
 
 // GetProofByIntentID retrieves proof details by intent ID
 func (r *ProofArtifactRepository) GetProofByIntentID(ctx context.Context, intentID string) (*IntentProofDetails, error) {
-	// First, find the batch transaction by intent_id
+	// First, find the batch transaction by intent_id, joining with proof_artifacts for governance data
 	btQuery := `
-		SELECT bt.batch_id, bt.accumulate_tx_hash, bt.account_url,
-			   bt.user_id, bt.intent_id, bt.from_chain, bt.to_chain,
+		SELECT bt.batch_id, COALESCE(bt.accumulate_tx_hash, ''), bt.account_url,
+			   COALESCE(bt.user_id, ''), COALESCE(bt.intent_id, ''), bt.from_chain, bt.to_chain,
 			   bt.from_address, bt.to_address, bt.amount, bt.token_symbol, bt.adi_url,
-			   bt.governance_level, bt.governance_valid, bt.chained_proof_valid,
-			   bt.created_at, bt.created_at_client,
+			   pa.gov_level, COALESCE(pa.verification_status = 'valid', FALSE), COALESCE(pa.verification_status IS NOT NULL, FALSE),
+			   COALESCE(bt.created_at, NOW()), bt.created_at_client,
 			   ab.status AS batch_status, ab.merkle_root AS batch_merkle_root,
 			   ab.transaction_count AS batch_tx_count,
-			   COALESCE(ab.quorum_reached, FALSE) AS batch_quorum_met
+			   COALESCE(ab.quorum_reached, FALSE) AS batch_quorum_met,
+			   COALESCE(pa.status, ab.status, 'pending') AS proof_status,
+			   pa.proof_id,
+			   ar.anchor_tx_hash, COALESCE(ar.confirmations, 0), COALESCE(ar.is_final, FALSE)
 		FROM batch_transactions bt
 		LEFT JOIN anchor_batches ab ON bt.batch_id = ab.id
+		LEFT JOIN proof_artifacts pa ON bt.intent_id = pa.intent_id
+		LEFT JOIN anchor_records ar ON ab.id = ar.batch_id
 		WHERE bt.intent_id = $1
+		ORDER BY pa.created_at DESC NULLS LAST
 		LIMIT 1`
 
 	var details IntentProofDetails
@@ -2765,6 +2771,11 @@ func (r *ProofArtifactRepository) GetProofByIntentID(ctx context.Context, intent
 	var batchTxCount sql.NullInt64
 	var batchQuorumMet bool
 	var foundViaBatchTx bool
+	var proofStatus string
+	var proofID *uuid.UUID
+	var anchorTxHash sql.NullString
+	var anchorConfirmations int
+	var anchorIsFinal bool
 
 	err := r.db.QueryRowContext(ctx, btQuery, intentID).Scan(
 		&details.BatchID, &details.AccumTxHash, &details.IntentSummary.AdiURL,
@@ -2773,6 +2784,7 @@ func (r *ProofArtifactRepository) GetProofByIntentID(ctx context.Context, intent
 		&details.GovernanceLevel, &details.GovernanceValid, &details.ChainedProofValid,
 		&details.CreatedAt, &details.CreatedAtClient,
 		&batchStatus, &batchMerkleRoot, &batchTxCount, &batchQuorumMet,
+		&proofStatus, &proofID, &anchorTxHash, &anchorConfirmations, &anchorIsFinal,
 	)
 
 	if err == sql.ErrNoRows {
@@ -2808,6 +2820,14 @@ func (r *ProofArtifactRepository) GetProofByIntentID(ctx context.Context, intent
 		return nil, fmt.Errorf("failed to get batch transaction by intent: %w", err)
 	} else {
 		foundViaBatchTx = true
+		// Set status and anchor info from the joined query
+		details.Status = proofStatus
+		details.ProofID = proofID
+		if anchorTxHash.Valid {
+			details.AnchorTxHash = &anchorTxHash.String
+		}
+		details.AnchorConfirmations = anchorConfirmations
+		details.AnchorIsFinal = anchorIsFinal
 	}
 
 	// Only process batch-related fields if we found via batch_transactions
@@ -2821,14 +2841,24 @@ func (r *ProofArtifactRepository) GetProofByIntentID(ctx context.Context, intent
 		}
 		details.BatchQuorumMet = batchQuorumMet
 
-		// Get proof artifact if exists
-		proof, err := r.GetProofByTxHash(ctx, details.AccumTxHash)
-		if err != nil {
-			return nil, err
-		}
-		if proof != nil {
-			details.Proof = proof
-			details.ProofID = &proof.ProofID
+		// Get proof artifact if exists (for full proof data)
+		if proofID != nil {
+			proof, err := r.GetProofByID(ctx, *proofID)
+			if err != nil {
+				return nil, err
+			}
+			if proof != nil {
+				details.Proof = proof
+			}
+		} else if details.AccumTxHash != "" {
+			proof, err := r.GetProofByTxHash(ctx, details.AccumTxHash)
+			if err != nil {
+				return nil, err
+			}
+			if proof != nil {
+				details.Proof = proof
+				details.ProofID = &proof.ProofID
+			}
 		}
 	}
 
@@ -2885,14 +2915,8 @@ func (r *ProofArtifactRepository) GetProofByIntentID(ctx context.Context, intent
 				details.TokenSymbol = &txMeta.TokenSymbol
 			}
 		}
-	} else if foundViaBatchTx {
-		// Derive status from batch (only if we found via batch_transactions)
-		if batchStatus.Valid {
-			details.Status = batchStatus.String
-		} else {
-			details.Status = "pending"
-		}
 	}
+	// Status is already set from the joined query (proofStatus) or proof.Status
 
 	// Calculate current stage
 	details.CurrentStage = r.calculateIntentStage(details.BatchStatus, details.AnchorConfirmations, details.AnchorIsFinal, details.GovernanceLevel, details.Status)
