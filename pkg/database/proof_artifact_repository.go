@@ -2815,6 +2815,30 @@ func (r *ProofArtifactRepository) GetProofByIntentID(ctx context.Context, intent
 			govLevel := string(*proof.GovLevel)
 			details.GovernanceLevel = &govLevel
 		}
+
+		// Copy transaction metadata from proof (populated via JOIN in GetProofByID)
+		if proof.FromChain != "" {
+			details.FromChain = &proof.FromChain
+		}
+		if proof.ToChain != "" {
+			details.ToChain = &proof.ToChain
+		}
+		if proof.FromAddress != "" {
+			details.FromAddress = &proof.FromAddress
+		}
+		if proof.ToAddress != "" {
+			details.ToAddress = &proof.ToAddress
+		}
+		if proof.Amount != "" {
+			details.Amount = &proof.Amount
+		}
+		if proof.TokenSymbol != "" {
+			details.TokenSymbol = &proof.TokenSymbol
+		}
+		if proof.AdiURL != "" {
+			details.AdiURL = &proof.AdiURL
+		}
+
 		foundViaBatchTx = false
 	} else if err != nil {
 		return nil, fmt.Errorf("failed to get batch transaction by intent: %w", err)
