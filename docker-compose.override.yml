@@ -1,0 +1,31 @@
+version: '3.8'
+
+services:
+  # Disable postgres - use existing certen-postgres
+  postgres:
+    image: alpine:latest
+    container_name: certen-proofs-db-dummy
+    entrypoint: ['sleep', 'infinity']
+    healthcheck:
+      test: ['CMD', 'true']
+      interval: 5s
+      timeout: 2s
+      retries: 1
+    networks:
+      - certen-validators_certen-net
+
+  proof-service:
+    environment:
+      DATABASE_URL: postgres://certen:certen_testnet_2026@certen-postgres:5432/certen_proofs?sslmode=disable
+      CORS_ORIGINS: "http://localhost:3000,http://localhost:3001,https://certen-web.web.app,https://certen-web.firebaseapp.com,*"
+    networks:
+      - certen-validators_certen-net
+
+  # Disable explorer - integrated into certen-web-app
+  proof-explorer:
+    profiles:
+      - disabled
+
+networks:
+  certen-validators_certen-net:
+    external: true
