@@ -406,3 +406,256 @@ func ParseUUID(s string) (uuid.UUID, error) {
 func NewUUID() uuid.UUID {
 	return uuid.New()
 }
+
+// ============================================================================
+// MULTI-LEG INTENT TYPES
+// Per Multi-Leg Intents Implementation Plan
+// ============================================================================
+
+// ExecutionMode represents how legs are executed in a multi-leg intent
+type ExecutionMode string
+
+const (
+	ExecutionModeSequential ExecutionMode = "sequential" // Legs execute in order
+	ExecutionModeParallel   ExecutionMode = "parallel"   // All legs execute simultaneously
+	ExecutionModeAtomic     ExecutionMode = "atomic"     // All or nothing
+)
+
+// IntentStatus represents the overall status of a multi-leg intent
+type IntentStatus string
+
+const (
+	IntentStatusDiscovered      IntentStatus = "discovered"
+	IntentStatusProcessing      IntentStatus = "processing"
+	IntentStatusAnchoring       IntentStatus = "anchoring"
+	IntentStatusCompleted       IntentStatus = "completed"
+	IntentStatusPartialComplete IntentStatus = "partial_complete"
+	IntentStatusFailed          IntentStatus = "failed"
+	IntentStatusRolledBack      IntentStatus = "rolled_back"
+	IntentStatusExpired         IntentStatus = "expired"
+)
+
+// LegStatus represents the status of a single leg
+type LegStatus string
+
+const (
+	LegStatusPending    LegStatus = "pending"
+	LegStatusReady      LegStatus = "ready"
+	LegStatusProcessing LegStatus = "processing"
+	LegStatusBatched    LegStatus = "batched"
+	LegStatusAnchored   LegStatus = "anchored"
+	LegStatusConfirmed  LegStatus = "confirmed"
+	LegStatusExecuted   LegStatus = "executed"
+	LegStatusCompleted  LegStatus = "completed"
+	LegStatusFailed     LegStatus = "failed"
+	LegStatusSkipped    LegStatus = "skipped"
+)
+
+// LegRole represents the role of a leg in a multi-leg intent
+type LegRole string
+
+const (
+	LegRoleSource       LegRole = "source"
+	LegRoleDestination  LegRole = "destination"
+	LegRoleIntermediate LegRole = "intermediate"
+)
+
+// DependencyCondition represents the condition type for leg dependencies
+type DependencyCondition string
+
+const (
+	DependencySuccess      DependencyCondition = "success"      // Depends on successful completion
+	DependencyCompletion   DependencyCondition = "completion"   // Depends on any completion
+	DependencyConfirmation DependencyCondition = "confirmation" // Depends on anchor confirmation
+)
+
+// CertenIntent represents a master intent record (1-N legs)
+// Maps to: certen_intents table
+type CertenIntent struct {
+	IntentID         string          `db:"intent_id" json:"intent_id"`
+	OperationID      string          `db:"operation_id" json:"operation_id"`
+	UserID           sql.NullString  `db:"user_id" json:"user_id,omitempty"`
+	OrganizationADI  sql.NullString  `db:"organization_adi" json:"organization_adi,omitempty"`
+	AccumulateTxHash string          `db:"accumulate_tx_hash" json:"accumulate_tx_hash"`
+	AccountURL       sql.NullString  `db:"account_url" json:"account_url,omitempty"`
+	Partition        sql.NullString  `db:"partition" json:"partition,omitempty"`
+	LegCount         int             `db:"leg_count" json:"leg_count"`
+	ExecutionMode    ExecutionMode   `db:"execution_mode" json:"execution_mode"`
+	ProofClass       string          `db:"proof_class" json:"proof_class"`
+	Status           IntentStatus    `db:"status" json:"status"`
+	CurrentLegIndex  int             `db:"current_leg_index" json:"current_leg_index"`
+	LegsCompleted    int             `db:"legs_completed" json:"legs_completed"`
+	LegsFailed       int             `db:"legs_failed" json:"legs_failed"`
+	LegsPending      int             `db:"legs_pending" json:"legs_pending"`
+	IntentData       json.RawMessage `db:"intent_data" json:"intent_data"`
+	CrossChainData   json.RawMessage `db:"cross_chain_data" json:"cross_chain_data"`
+	GovernanceData   json.RawMessage `db:"governance_data" json:"governance_data"`
+	ReplayData       json.RawMessage `db:"replay_data" json:"replay_data"`
+	CreatedAt        time.Time       `db:"created_at" json:"created_at"`
+	UpdatedAt        time.Time       `db:"updated_at" json:"updated_at"`
+	CompletedAt      sql.NullTime    `db:"completed_at" json:"completed_at,omitempty"`
+	ExpiresAt        sql.NullTime    `db:"expires_at" json:"expires_at,omitempty"`
+	ErrorMessage     sql.NullString  `db:"error_message" json:"error_message,omitempty"`
+}
+
+// IntentLeg represents a single leg within a multi-leg intent
+// Maps to: intent_legs table
+type IntentLeg struct {
+	LegID           uuid.UUID      `db:"leg_id" json:"leg_id"`
+	IntentID        string         `db:"intent_id" json:"intent_id"`
+	LegIndex        int            `db:"leg_index" json:"leg_index"`
+	LegExternalID   sql.NullString `db:"leg_external_id" json:"leg_external_id,omitempty"`
+	TargetChain     string         `db:"target_chain" json:"target_chain"`
+	ChainID         sql.NullInt64  `db:"chain_id" json:"chain_id,omitempty"`
+	NetworkName     sql.NullString `db:"network_name" json:"network_name,omitempty"`
+	Role            LegRole        `db:"role" json:"role"`
+	SequenceOrder   int            `db:"sequence_order" json:"sequence_order"`
+	DependsOnLegs   []string       `db:"depends_on_legs" json:"depends_on_legs,omitempty"` // TEXT[]
+	FromAddress     sql.NullString `db:"from_address" json:"from_address,omitempty"`
+	ToAddress       sql.NullString `db:"to_address" json:"to_address,omitempty"`
+	Amount          sql.NullString `db:"amount" json:"amount,omitempty"`
+	TokenSymbol     sql.NullString `db:"token_symbol" json:"token_symbol,omitempty"`
+	TokenAddress    sql.NullString `db:"token_address" json:"token_address,omitempty"`
+	AssetNative     bool           `db:"asset_native" json:"asset_native"`
+	AssetDecimals   int            `db:"asset_decimals" json:"asset_decimals"`
+	GasLimit        sql.NullInt64  `db:"gas_limit" json:"gas_limit,omitempty"`
+	MaxFeePerGas    sql.NullString `db:"max_fee_per_gas" json:"max_fee_per_gas,omitempty"`
+	MaxPriorityFee  sql.NullString `db:"max_priority_fee" json:"max_priority_fee,omitempty"`
+	GasPayer        sql.NullString `db:"gas_payer" json:"gas_payer,omitempty"`
+	AnchorContract  sql.NullString `db:"anchor_contract" json:"anchor_contract,omitempty"`
+	FunctionSelector sql.NullString `db:"function_selector" json:"function_selector,omitempty"`
+	Status          LegStatus      `db:"status" json:"status"`
+	ExecutionTxHash sql.NullString `db:"execution_tx_hash" json:"execution_tx_hash,omitempty"`
+	ExecutionBlock  sql.NullInt64  `db:"execution_block" json:"execution_block,omitempty"`
+	ExecutionGasUsed sql.NullInt64 `db:"execution_gas_used" json:"execution_gas_used,omitempty"`
+	ExecutionError  sql.NullString `db:"execution_error" json:"execution_error,omitempty"`
+	BatchID         uuid.NullUUID  `db:"batch_id" json:"batch_id,omitempty"`
+	AnchorID        uuid.NullUUID  `db:"anchor_id" json:"anchor_id,omitempty"`
+	ProofID         uuid.NullUUID  `db:"proof_id" json:"proof_id,omitempty"`
+	RetryCount      int            `db:"retry_count" json:"retry_count"`
+	MaxRetries      int            `db:"max_retries" json:"max_retries"`
+	LastRetryAt     sql.NullTime   `db:"last_retry_at" json:"last_retry_at,omitempty"`
+	CreatedAt       time.Time      `db:"created_at" json:"created_at"`
+	UpdatedAt       time.Time      `db:"updated_at" json:"updated_at"`
+	StartedAt       sql.NullTime   `db:"started_at" json:"started_at,omitempty"`
+	CompletedAt     sql.NullTime   `db:"completed_at" json:"completed_at,omitempty"`
+}
+
+// LegDependency represents an explicit dependency between legs
+// Maps to: leg_dependencies table
+type LegDependency struct {
+	DependencyID   uuid.UUID           `db:"dependency_id" json:"dependency_id"`
+	IntentID       string              `db:"intent_id" json:"intent_id"`
+	LegID          uuid.UUID           `db:"leg_id" json:"leg_id"`
+	DependsOnLegID uuid.UUID           `db:"depends_on_leg_id" json:"depends_on_leg_id"`
+	ConditionType  DependencyCondition `db:"condition_type" json:"condition_type"`
+	IsSatisfied    bool                `db:"is_satisfied" json:"is_satisfied"`
+	SatisfiedAt    sql.NullTime        `db:"satisfied_at" json:"satisfied_at,omitempty"`
+	CreatedAt      time.Time           `db:"created_at" json:"created_at"`
+}
+
+// IntentChainGroup represents legs grouped by target chain
+// Maps to: intent_chain_groups table
+type IntentChainGroup struct {
+	GroupID      uuid.UUID     `db:"group_id" json:"group_id"`
+	IntentID     string        `db:"intent_id" json:"intent_id"`
+	TargetChain  string        `db:"target_chain" json:"target_chain"`
+	ChainID      sql.NullInt64 `db:"chain_id" json:"chain_id,omitempty"`
+	ChainKey     string        `db:"chain_key" json:"chain_key"` // e.g., "ethereum:1"
+	LegCount     int           `db:"leg_count" json:"leg_count"`
+	LegIDs       []uuid.UUID   `db:"leg_ids" json:"leg_ids"` // UUID[]
+	Status       LegStatus     `db:"status" json:"status"`
+	BatchID      uuid.NullUUID `db:"batch_id" json:"batch_id,omitempty"`
+	AnchorID     uuid.NullUUID `db:"anchor_id" json:"anchor_id,omitempty"`
+	AnchorTxHash sql.NullString `db:"anchor_tx_hash" json:"anchor_tx_hash,omitempty"`
+	AnchorBlock  sql.NullInt64 `db:"anchor_block" json:"anchor_block,omitempty"`
+	CreatedAt    time.Time     `db:"created_at" json:"created_at"`
+	AnchoredAt   sql.NullTime  `db:"anchored_at" json:"anchored_at,omitempty"`
+	CompletedAt  sql.NullTime  `db:"completed_at" json:"completed_at,omitempty"`
+}
+
+// ============================================================================
+// MULTI-LEG HELPER TYPES FOR INSERT/UPDATE OPERATIONS
+// ============================================================================
+
+// NewCertenIntent is used to create a new multi-leg intent
+type NewCertenIntent struct {
+	IntentID         string
+	OperationID      string
+	UserID           string
+	OrganizationADI  string
+	AccumulateTxHash string
+	AccountURL       string
+	Partition        string
+	LegCount         int
+	ExecutionMode    ExecutionMode
+	ProofClass       string
+	IntentData       json.RawMessage
+	CrossChainData   json.RawMessage
+	GovernanceData   json.RawMessage
+	ReplayData       json.RawMessage
+	ExpiresAt        time.Time
+}
+
+// NewIntentLeg is used to create a new leg within an intent
+type NewIntentLeg struct {
+	IntentID        string
+	LegIndex        int
+	LegExternalID   string
+	TargetChain     string
+	ChainID         int64
+	NetworkName     string
+	Role            LegRole
+	SequenceOrder   int
+	DependsOnLegs   []string
+	FromAddress     string
+	ToAddress       string
+	Amount          string
+	TokenSymbol     string
+	TokenAddress    string
+	AssetNative     bool
+	AssetDecimals   int
+	GasLimit        int64
+	MaxFeePerGas    string
+	MaxPriorityFee  string
+	GasPayer        string
+	AnchorContract  string
+	FunctionSelector string
+	MaxRetries      int
+}
+
+// NewLegDependency is used to create a new leg dependency
+type NewLegDependency struct {
+	IntentID       string
+	LegID          uuid.UUID
+	DependsOnLegID uuid.UUID
+	ConditionType  DependencyCondition
+}
+
+// NewIntentChainGroup is used to create a new chain group
+type NewIntentChainGroup struct {
+	IntentID    string
+	TargetChain string
+	ChainID     int64
+	ChainKey    string
+	LegIDs      []uuid.UUID
+}
+
+// IntentLegProgress represents the progress of legs in an intent
+type IntentLegProgress struct {
+	IntentID      string   `json:"intent_id"`
+	TotalLegs     int      `json:"total_legs"`
+	CompletedLegs int      `json:"completed_legs"`
+	FailedLegs    int      `json:"failed_legs"`
+	PendingLegs   int      `json:"pending_legs"`
+	TargetChains  []string `json:"target_chains"`
+	Progress      float64  `json:"progress_percent"`
+}
+
+// IntentLegSummary provides a summary view of an intent with its legs
+type IntentLegSummary struct {
+	Intent       CertenIntent       `json:"intent"`
+	Legs         []IntentLeg        `json:"legs"`
+	ChainGroups  []IntentChainGroup `json:"chain_groups"`
+	Dependencies []LegDependency    `json:"dependencies"`
+}
