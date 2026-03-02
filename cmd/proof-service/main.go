@@ -89,6 +89,7 @@ func main() {
 			status = "degraded"
 		}
 		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Cache-Control", "no-store")
 		fmt.Fprintf(w, `{"status":"%s","service":"proof-service","version":"1.0.0"}`, status)
 	})
 
@@ -178,6 +179,12 @@ func corsMiddleware(allowedOrigins []string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			origin := r.Header.Get("Origin")
+
+			// Skip CORS headers when no Origin is present (non-browser requests)
+			if origin == "" {
+				next.ServeHTTP(w, r)
+				return
+			}
 
 			// Check if origin is allowed
 			allowed := false
