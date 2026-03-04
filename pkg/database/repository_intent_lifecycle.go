@@ -82,7 +82,8 @@ func (r *IntentLifecycleRepository) ListRecentEnriched(ctx context.Context, limi
 	}
 
 	query := `
-		SELECT il.id, il.intent_id, il.accum_tx_hash, il.user_id, il.status,
+		SELECT DISTINCT ON (il.intent_id)
+		       il.id, il.intent_id, il.accum_tx_hash, il.user_id, il.status,
 		       il.target_chain, il.proof_class, il.error_message, il.block_height,
 		       il.cycle_id, il.write_back_tx,
 		       il.created_at, il.updated_at, il.submitted_at, il.authorized_at,
@@ -91,11 +92,12 @@ func (r *IntentLifecycleRepository) ListRecentEnriched(ctx context.Context, limi
 		       bt.amount, bt.token_symbol, bt.account_url
 		FROM intent_lifecycle il
 		LEFT JOIN batch_transactions bt ON bt.intent_id = il.intent_id
-		ORDER BY il.created_at DESC
-		LIMIT $1
+		ORDER BY il.intent_id, il.created_at DESC
 	`
 
-	return r.scanEnrichedRows(ctx, query, limit)
+	// Wrap with outer query to apply limit and final ordering
+	wrappedQuery := fmt.Sprintf(`SELECT * FROM (%s) sub ORDER BY created_at DESC LIMIT $1`, query)
+	return r.scanEnrichedRows(ctx, wrappedQuery, limit)
 }
 
 // ListByUserEnriched returns lifecycle records for a user joined with batch_transactions
@@ -108,7 +110,8 @@ func (r *IntentLifecycleRepository) ListByUserEnriched(ctx context.Context, user
 	}
 
 	query := `
-		SELECT il.id, il.intent_id, il.accum_tx_hash, il.user_id, il.status,
+		SELECT DISTINCT ON (il.intent_id)
+		       il.id, il.intent_id, il.accum_tx_hash, il.user_id, il.status,
 		       il.target_chain, il.proof_class, il.error_message, il.block_height,
 		       il.cycle_id, il.write_back_tx,
 		       il.created_at, il.updated_at, il.submitted_at, il.authorized_at,
@@ -118,11 +121,11 @@ func (r *IntentLifecycleRepository) ListByUserEnriched(ctx context.Context, user
 		FROM intent_lifecycle il
 		LEFT JOIN batch_transactions bt ON bt.intent_id = il.intent_id
 		WHERE il.user_id = $1
-		ORDER BY il.created_at DESC
-		LIMIT $2
+		ORDER BY il.intent_id, il.created_at DESC
 	`
 
-	return r.scanEnrichedRows(ctx, query, userID, limit)
+	wrappedQuery := fmt.Sprintf(`SELECT * FROM (%s) sub ORDER BY created_at DESC LIMIT $2`, query)
+	return r.scanEnrichedRows(ctx, wrappedQuery, userID, limit)
 }
 
 // ListByStatus returns lifecycle records filtered by status
@@ -135,7 +138,8 @@ func (r *IntentLifecycleRepository) ListByStatus(ctx context.Context, status Int
 	}
 
 	query := `
-		SELECT il.id, il.intent_id, il.accum_tx_hash, il.user_id, il.status,
+		SELECT DISTINCT ON (il.intent_id)
+		       il.id, il.intent_id, il.accum_tx_hash, il.user_id, il.status,
 		       il.target_chain, il.proof_class, il.error_message, il.block_height,
 		       il.cycle_id, il.write_back_tx,
 		       il.created_at, il.updated_at, il.submitted_at, il.authorized_at,
@@ -145,11 +149,11 @@ func (r *IntentLifecycleRepository) ListByStatus(ctx context.Context, status Int
 		FROM intent_lifecycle il
 		LEFT JOIN batch_transactions bt ON bt.intent_id = il.intent_id
 		WHERE il.status = $1
-		ORDER BY il.created_at DESC
-		LIMIT $2
+		ORDER BY il.intent_id, il.created_at DESC
 	`
 
-	return r.scanEnrichedRows(ctx, query, string(status), limit)
+	wrappedQuery := fmt.Sprintf(`SELECT * FROM (%s) sub ORDER BY created_at DESC LIMIT $2`, query)
+	return r.scanEnrichedRows(ctx, wrappedQuery, string(status), limit)
 }
 
 // scanEnrichedRows scans rows from a joined lifecycle + batch_transactions query
