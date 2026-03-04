@@ -1050,6 +1050,11 @@ type IntentSummary struct {
 	ProofID   *uuid.UUID `json:"proof_id,omitempty" db:"proof_id"`
 	BatchID   *uuid.UUID `json:"batch_id,omitempty" db:"batch_id"`
 
+	// Lifecycle (from intent_lifecycle table if available)
+	LifecycleStatus *string    `json:"lifecycle_status,omitempty"`
+	CompletedAt     *time.Time `json:"completed_at,omitempty"`
+	FailedAt        *time.Time `json:"failed_at,omitempty"`
+
 	// Timestamps
 	CreatedAt       time.Time  `json:"created_at" db:"created_at"`
 	CreatedAtClient *time.Time `json:"created_at_client,omitempty" db:"created_at_client"`

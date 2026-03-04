@@ -3295,14 +3295,14 @@ func (r *ProofArtifactRepository) SearchAuditTrail(ctx context.Context, filter *
 	if filter.SortOrder == "asc" {
 		sortOrder = "ASC"
 	}
-	sortBy := "bt.created_at"
+	sortBy := "created_at"
 	if filter.SortBy == "status" {
-		sortBy = "COALESCE(pa.status, ab.status, 'pending')"
+		sortBy = "status"
 	}
 
-	// Count total
+	// Count total (deduplicated by intent_id)
 	countQuery := fmt.Sprintf(`
-		SELECT COUNT(*)
+		SELECT COUNT(DISTINCT bt.intent_id)
 		FROM batch_transactions bt
 		LEFT JOIN anchor_batches ab ON bt.batch_id = ab.id
 		LEFT JOIN proof_artifacts pa ON bt.intent_id = pa.intent_id
@@ -3314,22 +3314,41 @@ func (r *ProofArtifactRepository) SearchAuditTrail(ctx context.Context, filter *
 		return nil, fmt.Errorf("failed to count audit results: %w", err)
 	}
 
-	// Get results
+	// Get results — DISTINCT ON deduplicates by intent_id, picking the row with
+	// highest anchor confirmations and best governance level per intent.
+	// Wrapped in subquery so final ORDER BY can differ from DISTINCT ON order.
 	query := fmt.Sprintf(`
-		SELECT COALESCE(bt.intent_id, ''), COALESCE(bt.user_id, ''), COALESCE(bt.accumulate_tx_hash, ''),
-			   bt.from_chain, bt.to_chain, bt.from_address, bt.to_address,
-			   bt.amount, bt.token_symbol, bt.adi_url,
-			   COALESCE(pa.status, ab.status, 'pending') AS status,
-			   pa.gov_level, COALESCE(pa.verification_status = 'valid', FALSE), COALESCE(pa.verification_status IS NOT NULL, FALSE),
-			   ar.anchor_tx_hash, COALESCE(ar.confirmations, 0) AS anchor_confirmations,
-			   COALESCE(ar.is_final, FALSE) AS anchor_is_final,
-			   pa.proof_id, bt.batch_id,
-			   COALESCE(bt.created_at, NOW()), bt.created_at_client
-		FROM batch_transactions bt
-		LEFT JOIN anchor_batches ab ON bt.batch_id = ab.id
-		LEFT JOIN anchor_records ar ON ab.id = ar.batch_id
-		LEFT JOIN proof_artifacts pa ON bt.intent_id = pa.intent_id
-		%s
+		SELECT intent_id, user_id, accumulate_tx_hash,
+			   from_chain, to_chain, from_address, to_address,
+			   amount, token_symbol, adi_url,
+			   status, gov_level, governance_valid, chained_proof_valid,
+			   anchor_tx_hash, anchor_confirmations, anchor_is_final,
+			   proof_id, batch_id,
+			   lifecycle_status, completed_at, failed_at,
+			   created_at, created_at_client
+		FROM (
+			SELECT DISTINCT ON (bt.intent_id)
+				   COALESCE(bt.intent_id, '') AS intent_id,
+				   COALESCE(bt.user_id, '') AS user_id,
+				   COALESCE(bt.accumulate_tx_hash, '') AS accumulate_tx_hash,
+				   bt.from_chain, bt.to_chain, bt.from_address, bt.to_address,
+				   bt.amount, bt.token_symbol, bt.adi_url,
+				   COALESCE(pa.status, ab.status, 'pending') AS status,
+				   pa.gov_level, COALESCE(pa.verification_status = 'valid', FALSE) AS governance_valid,
+				   COALESCE(pa.verification_status IS NOT NULL, FALSE) AS chained_proof_valid,
+				   ar.anchor_tx_hash, COALESCE(ar.confirmations, 0) AS anchor_confirmations,
+				   COALESCE(ar.is_final, FALSE) AS anchor_is_final,
+				   pa.proof_id, bt.batch_id,
+				   il.status AS lifecycle_status, il.completed_at, il.failed_at,
+				   COALESCE(bt.created_at, NOW()) AS created_at, bt.created_at_client
+			FROM batch_transactions bt
+			LEFT JOIN anchor_batches ab ON bt.batch_id = ab.id
+			LEFT JOIN anchor_records ar ON ab.id = ar.batch_id
+			LEFT JOIN proof_artifacts pa ON bt.intent_id = pa.intent_id
+			LEFT JOIN intent_lifecycle il ON bt.intent_id = il.intent_id
+			%s
+			ORDER BY bt.intent_id, ar.confirmations DESC NULLS LAST, pa.gov_level DESC NULLS LAST
+		) sub
 		ORDER BY %s %s
 		LIMIT $%d OFFSET $%d`, whereClause, sortBy, sortOrder, argIndex, argIndex+1)
 
@@ -3351,6 +3370,7 @@ func (r *ProofArtifactRepository) SearchAuditTrail(ctx context.Context, filter *
 			&s.Status, &s.GovernanceLevel, &s.GovernanceValid, &s.ChainedProofValid,
 			&s.AnchorTxHash, &s.AnchorConfirmations, &s.AnchorIsFinal,
 			&s.ProofID, &s.BatchID,
+			&s.LifecycleStatus, &s.CompletedAt, &s.FailedAt,
 			&s.CreatedAt, &s.CreatedAtClient,
 		); err != nil {
 			return nil, fmt.Errorf("failed to scan audit result: %w", err)
@@ -3360,6 +3380,21 @@ func (r *ProofArtifactRepository) SearchAuditTrail(ctx context.Context, filter *
 			govLevel = s.GovernanceLevel
 		}
 		s.CurrentStage = r.calculateIntentStage(&s.Status, s.AnchorConfirmations, s.AnchorIsFinal, govLevel, s.Status)
+
+		// Override stage from lifecycle if available and more advanced
+		if s.LifecycleStatus != nil {
+			switch *s.LifecycleStatus {
+			case "complete":
+				s.CurrentStage = 9
+				s.Status = "completed"
+			case "failed":
+				s.Status = "failed"
+			case "in_process":
+				if s.CurrentStage < 5 {
+					s.CurrentStage = 5
+				}
+			}
+		}
 		summaries = append(summaries, s)
 	}
 
