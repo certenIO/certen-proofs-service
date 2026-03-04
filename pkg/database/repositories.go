@@ -13,16 +13,18 @@ type Repositories struct {
 	ProofArtifacts *ProofArtifactRepository // NEW: Comprehensive proof artifact storage
 	Attestations   *AttestationRepository
 	Requests       *RequestRepository
+	IntentLifecycle *IntentLifecycleRepository
 }
 
 // NewRepositories creates all repositories with the given client
 func NewRepositories(client *Client) *Repositories {
 	return &Repositories{
-		Batches:        NewBatchRepository(client),
-		Anchors:        NewAnchorRepository(client),
-		Proofs:         NewProofRepository(client),
-		ProofArtifacts: NewProofArtifactRepository(client.DB()), // NEW: Uses raw *sql.DB
-		Attestations:   NewAttestationRepository(client),
-		Requests:       NewRequestRepository(client),
+		Batches:         NewBatchRepository(client),
+		Anchors:         NewAnchorRepository(client),
+		Proofs:          NewProofRepository(client),
+		ProofArtifacts:  NewProofArtifactRepository(client.DB()), // NEW: Uses raw *sql.DB
+		Attestations:    NewAttestationRepository(client),
+		Requests:        NewRequestRepository(client),
+		IntentLifecycle: NewIntentLifecycleRepository(client),
 	}
 }

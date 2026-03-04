@@ -78,6 +78,7 @@ func main() {
 		MaxExportSize:      10000,
 	}, logger)
 	txCenterHandlers := server.NewTransactionCenterHandlers(repos, cfg.ValidatorID, logger)
+	lifecycleHandlers := server.NewIntentLifecycleHandlers(repos, logger)
 
 	// Set up HTTP router
 	mux := http.NewServeMux()
@@ -115,6 +116,13 @@ func main() {
 	// API v1 Bulk Export endpoints
 	mux.HandleFunc("/api/v1/proofs/bulk/export", bulkHandlers.HandleBulkExport)
 	mux.HandleFunc("/api/v1/proofs/bulk/export/", bulkHandlers.HandleGetExportStatus)
+
+	// API v1 Intent Lifecycle endpoints (PostgreSQL source of truth)
+	mux.HandleFunc("/api/v1/intent/recent", lifecycleHandlers.HandleListRecent)
+	mux.HandleFunc("/api/v1/intent/status/", lifecycleHandlers.HandleListByStatus)
+	mux.HandleFunc("/api/v1/intent/user/", lifecycleHandlers.HandleListByUser)
+	mux.HandleFunc("/api/v1/intent/tx/", lifecycleHandlers.HandleGetByTxHash)
+	mux.HandleFunc("/api/v1/intent/", lifecycleHandlers.HandleGetByIntentID)
 
 	// API v1 Transaction Center endpoints (for web app integration)
 	mux.HandleFunc("/api/v1/intents/", txCenterHandlers.HandleIntentRouting)
