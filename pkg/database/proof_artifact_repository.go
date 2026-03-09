@@ -3614,6 +3614,51 @@ func (r *ProofArtifactRepository) calculateIntentStage(batchStatus *string, anch
 	return 1
 }
 
+// ============================================================================
+// CROSS-CHAIN QUERY API (Workstream 2.1 / GAP 3)
+// ============================================================================
+
+// GetIntentByChainTxHash looks up an intent_id from a chain-specific execution tx hash.
+// Queries the intent_legs table where execution_tx_hash matches.
+func (r *ProofArtifactRepository) GetIntentByChainTxHash(ctx context.Context, txHash string) (*string, error) {
+	query := `
+		SELECT intent_id
+		FROM intent_legs
+		WHERE execution_tx_hash = $1
+		LIMIT 1`
+
+	var intentID string
+	err := r.db.QueryRowContext(ctx, query, txHash).Scan(&intentID)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to look up intent by chain tx hash: %w", err)
+	}
+
+	return &intentID, nil
+}
+
+// GetRelatedLegProofs finds all leg proofs related to the intent that contains
+// the given chain-specific execution tx hash. This enables cross-chain query:
+// given a tx hash on any chain, retrieve proofs for all legs of the same intent.
+func (r *ProofArtifactRepository) GetRelatedLegProofs(ctx context.Context, txHash string) (*string, []LegProofDetail, error) {
+	intentID, err := r.GetIntentByChainTxHash(ctx, txHash)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to resolve intent from chain tx hash: %w", err)
+	}
+	if intentID == nil {
+		return nil, nil, nil
+	}
+
+	legProofs, err := r.getLegProofsForIntent(ctx, *intentID)
+	if err != nil {
+		return intentID, nil, fmt.Errorf("failed to retrieve leg proofs for intent %s: %w", *intentID, err)
+	}
+
+	return intentID, legProofs, nil
+}
+
 // Unused import fix
 var _ = hex.EncodeToString
 var _ = json.Marshal

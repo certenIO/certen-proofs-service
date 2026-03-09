@@ -100,6 +100,7 @@ func main() {
 	mux.HandleFunc("/api/v1/proofs/batch/", proofHandlers.HandleGetProofsByBatch)
 	mux.HandleFunc("/api/v1/proofs/anchor/", proofHandlers.HandleGetProofsByAnchor)
 	mux.HandleFunc("/api/v1/proofs/query", proofHandlers.HandleQueryProofs)
+	mux.HandleFunc("/api/v1/proofs/chain-tx/", proofHandlers.HandleGetRelatedProofsByChainTx)
 
 	// API v1 Proof Request endpoints
 	mux.HandleFunc("/api/v1/proofs/request", bundleHandlers.HandleRequestProof)

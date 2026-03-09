@@ -572,3 +572,42 @@ func (h *ProofHandlers) writeError(w http.ResponseWriter, status int, code, mess
 		},
 	})
 }
+
+// HandleGetRelatedProofsByChainTx handles GET /api/v1/proofs/chain-tx/{txHash}/related
+// Given a chain-specific execution tx hash, returns all related leg proofs (GAP 3).
+func (h *ProofHandlers) HandleGetRelatedProofsByChainTx(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		h.writeError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Only GET is allowed")
+		return
+	}
+
+	// Extract tx hash from path: /api/v1/proofs/chain-tx/{hash}/related
+	path := strings.TrimPrefix(r.URL.Path, "/api/v1/proofs/chain-tx/")
+	path = strings.TrimSuffix(path, "/related")
+	path = strings.TrimSuffix(path, "/")
+	txHash := path
+	if txHash == "" {
+		h.writeError(w, http.StatusBadRequest, "INVALID_TX_HASH", "Chain transaction hash is required")
+		return
+	}
+
+	ctx := r.Context()
+	intentID, legProofs, err := h.repos.ProofArtifacts.GetRelatedLegProofs(ctx, txHash)
+	if err != nil {
+		h.logger.Printf("Error getting related proofs for chain tx %s: %v", txHash, err)
+		h.writeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to retrieve related proofs")
+		return
+	}
+
+	if intentID == nil {
+		h.writeError(w, http.StatusNotFound, "NOT_FOUND", fmt.Sprintf("No intent found containing chain tx hash: %s", txHash))
+		return
+	}
+
+	h.writeJSON(w, http.StatusOK, map[string]interface{}{
+		"intent_id":        *intentID,
+		"query_tx_hash":    txHash,
+		"leg_count":        len(legProofs),
+		"leg_proofs":       legProofs,
+	})
+}
