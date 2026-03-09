@@ -353,6 +353,16 @@ func (r *ProofArtifactRepository) QueryProofs(ctx context.Context, filter *Proof
 		args = append(args, *filter.CreatedBefore)
 		argIndex++
 	}
+	if filter.LegID != nil {
+		conditions = append(conditions, fmt.Sprintf("pa.leg_id = $%d", argIndex))
+		args = append(args, *filter.LegID)
+		argIndex++
+	}
+	if filter.MultiLegIntentID != nil {
+		conditions = append(conditions, fmt.Sprintf("pa.multi_leg_intent_id = $%d", argIndex))
+		args = append(args, *filter.MultiLegIntentID)
+		argIndex++
+	}
 
 	whereClause := ""
 	if len(conditions) > 0 {
@@ -2945,7 +2955,163 @@ func (r *ProofArtifactRepository) GetProofByIntentID(ctx context.Context, intent
 	// Calculate current stage
 	details.CurrentStage = r.calculateIntentStage(details.BatchStatus, details.AnchorConfirmations, details.AnchorIsFinal, details.GovernanceLevel, details.Status)
 
+	// Multi-leg detection: check if this intent has multiple legs via certen_intents table
+	var legCount int
+	legCountQuery := `SELECT leg_count FROM certen_intents WHERE intent_id = $1`
+	err = r.db.QueryRowContext(ctx, legCountQuery, intentID).Scan(&legCount)
+	if err != nil && err != sql.ErrNoRows {
+		return nil, fmt.Errorf("failed to check multi-leg status: %w", err)
+	}
+
+	if legCount > 1 {
+		details.LegCount = legCount
+
+		// Fetch all leg proofs for this multi-leg intent
+		legProofs, lpErr := r.getLegProofsForIntent(ctx, intentID)
+		if lpErr != nil {
+			return nil, fmt.Errorf("failed to get leg proofs: %w", lpErr)
+		}
+		details.LegProofs = legProofs
+	}
+
 	return &details, nil
+}
+
+// GetAllProofsByIntentID retrieves all proof artifacts associated with an intent ID,
+// returning multiple proofs for multi-leg intents instead of just one.
+func (r *ProofArtifactRepository) GetAllProofsByIntentID(ctx context.Context, intentID string) ([]*ProofArtifact, error) {
+	query := `
+		SELECT pa.proof_id, pa.proof_type, pa.proof_version, pa.accum_tx_hash, pa.account_url,
+			   pa.batch_id, pa.batch_position, pa.anchor_id, pa.anchor_tx_hash,
+			   pa.anchor_block_number, pa.anchor_chain, pa.merkle_root, pa.leaf_hash, pa.leaf_index,
+			   pa.gov_level, pa.proof_class, pa.validator_id, pa.status, pa.verification_status,
+			   pa.created_at, pa.anchored_at, pa.verified_at, pa.artifact_json, pa.artifact_hash,
+			   pa.intent_id, pa.leg_id, pa.multi_leg_intent_id,
+			   bt.adi_url, bt.from_chain, bt.to_chain, bt.from_address, bt.to_address, bt.amount, bt.token_symbol
+		FROM proof_artifacts pa
+		LEFT JOIN batch_transactions bt ON bt.intent_id = pa.intent_id
+		WHERE pa.intent_id = $1 OR pa.multi_leg_intent_id = $1
+		ORDER BY pa.created_at ASC`
+
+	rows, err := r.db.QueryContext(ctx, query, intentID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query all proofs by intent: %w", err)
+	}
+	defer rows.Close()
+
+	var proofs []*ProofArtifact
+	for rows.Next() {
+		var p ProofArtifact
+		var adiURL, fromChain, toChain, fromAddr, toAddr, amount, tokenSymbol sql.NullString
+		if err := rows.Scan(
+			&p.ProofID, &p.ProofType, &p.ProofVersion, &p.AccumTxHash, &p.AccountURL,
+			&p.BatchID, &p.BatchPosition, &p.AnchorID, &p.AnchorTxHash,
+			&p.AnchorBlockNumber, &p.AnchorChain, &p.MerkleRoot, &p.LeafHash, &p.LeafIndex,
+			&p.GovLevel, &p.ProofClass, &p.ValidatorID, &p.Status, &p.VerificationStatus,
+			&p.CreatedAt, &p.AnchoredAt, &p.VerifiedAt, &p.ArtifactJSON, &p.ArtifactHash,
+			&p.IntentID, &p.LegID, &p.MultiLegIntentID,
+			&adiURL, &fromChain, &toChain, &fromAddr, &toAddr, &amount, &tokenSymbol,
+		); err != nil {
+			return nil, fmt.Errorf("failed to scan proof artifact: %w", err)
+		}
+		if adiURL.Valid {
+			p.AdiURL = adiURL.String
+		}
+		if fromChain.Valid {
+			p.FromChain = fromChain.String
+		}
+		if toChain.Valid {
+			p.ToChain = toChain.String
+		}
+		if fromAddr.Valid {
+			p.FromAddress = fromAddr.String
+		}
+		if toAddr.Valid {
+			p.ToAddress = toAddr.String
+		}
+		if amount.Valid {
+			p.Amount = amount.String
+		}
+		if tokenSymbol.Valid {
+			p.TokenSymbol = tokenSymbol.String
+		}
+		proofs = append(proofs, &p)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating proof rows: %w", err)
+	}
+
+	return proofs, nil
+}
+
+// getLegProofsForIntent retrieves leg-level proof details for a multi-leg intent,
+// joining intent_legs with proof_artifacts to produce per-leg proof information.
+func (r *ProofArtifactRepository) getLegProofsForIntent(ctx context.Context, intentID string) ([]LegProofDetail, error) {
+	query := `
+		SELECT il.leg_id, il.leg_index, il.target_chain, il.role, il.status,
+			   il.from_address, il.to_address, il.amount, il.token_symbol,
+			   il.created_at, il.completed_at,
+			   pa.proof_id, pa.anchor_tx_hash
+		FROM intent_legs il
+		LEFT JOIN proof_artifacts pa ON pa.leg_id = il.leg_id
+		WHERE il.intent_id = $1
+		ORDER BY il.leg_index ASC`
+
+	rows, err := r.db.QueryContext(ctx, query, intentID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query leg proofs: %w", err)
+	}
+	defer rows.Close()
+
+	var legProofs []LegProofDetail
+	for rows.Next() {
+		var lp LegProofDetail
+		var fromAddr, toAddr, amount, tokenSymbol sql.NullString
+		var completedAt sql.NullTime
+		var proofID *uuid.UUID
+		var anchorTxHash sql.NullString
+
+		if err := rows.Scan(
+			&lp.LegID, &lp.LegIndex, &lp.TargetChain, &lp.Role, &lp.Status,
+			&fromAddr, &toAddr, &amount, &tokenSymbol,
+			&lp.CreatedAt, &completedAt,
+			&proofID, &anchorTxHash,
+		); err != nil {
+			return nil, fmt.Errorf("failed to scan leg proof: %w", err)
+		}
+		if fromAddr.Valid {
+			lp.FromAddress = &fromAddr.String
+		}
+		if toAddr.Valid {
+			lp.ToAddress = &toAddr.String
+		}
+		if amount.Valid {
+			lp.Amount = &amount.String
+		}
+		if tokenSymbol.Valid {
+			lp.TokenSymbol = &tokenSymbol.String
+		}
+		if completedAt.Valid {
+			lp.CompletedAt = &completedAt.Time
+		}
+		if proofID != nil {
+			lp.ProofID = proofID
+			// Fetch full proof artifact for this leg
+			proof, pErr := r.GetProofByID(ctx, *proofID)
+			if pErr == nil && proof != nil {
+				lp.Proof = proof
+			}
+		}
+		if anchorTxHash.Valid {
+			lp.AnchorTxHash = &anchorTxHash.String
+		}
+		legProofs = append(legProofs, lp)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating leg proof rows: %w", err)
+	}
+
+	return legProofs, nil
 }
 
 // GetTimelineByIntentID generates timeline events from proof_artifacts and anchor_batches

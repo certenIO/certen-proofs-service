@@ -107,6 +107,11 @@ type ProofArtifact struct {
 	// Computed
 	ArtifactHash []byte `json:"artifact_hash" db:"artifact_hash"`
 
+	// Multi-Leg Reference (populated from proof_artifacts columns added in migration 007)
+	IntentID         *string    `json:"intent_id,omitempty" db:"intent_id"`
+	LegID            *uuid.UUID `json:"leg_id,omitempty" db:"leg_id"`
+	MultiLegIntentID *string    `json:"multi_leg_intent_id,omitempty" db:"multi_leg_intent_id"`
+
 	// Transaction Metadata (populated from batch_transactions via JOIN)
 	AdiURL      string `json:"adi_url,omitempty"`
 	FromChain   string `json:"from_chain,omitempty"`
@@ -460,6 +465,10 @@ type ProofArtifactFilter struct {
 	// Chain filter
 	AnchorChain       *string `json:"anchor_chain,omitempty"`
 	AnchorBlockNumber *int64  `json:"anchor_block_number,omitempty"`
+
+	// Multi-leg filters (GAP 7)
+	LegID            *string `json:"leg_id,omitempty"`
+	MultiLegIntentID *string `json:"multi_leg_intent_id,omitempty"`
 
 	// Time range
 	CreatedAfter  *time.Time `json:"created_after,omitempty"`
@@ -1078,6 +1087,28 @@ type IntentProofDetails struct {
 
 	// Attestations Summary
 	AttestationCount int `json:"attestation_count"`
+
+	// Multi-Leg Proof Details (populated when intent has leg_count > 1)
+	LegCount int              `json:"leg_count,omitempty"`
+	LegProofs []LegProofDetail `json:"leg_proofs,omitempty"`
+}
+
+// LegProofDetail contains proof information for a single leg of a multi-leg intent
+type LegProofDetail struct {
+	LegID       uuid.UUID      `json:"leg_id"`
+	LegIndex    int            `json:"leg_index"`
+	TargetChain string         `json:"target_chain"`
+	Role        string         `json:"role"`
+	Status      string         `json:"status"`
+	ProofID     *uuid.UUID     `json:"proof_id,omitempty"`
+	Proof       *ProofArtifact `json:"proof,omitempty"`
+	AnchorTxHash *string       `json:"anchor_tx_hash,omitempty"`
+	FromAddress *string        `json:"from_address,omitempty"`
+	ToAddress   *string        `json:"to_address,omitempty"`
+	Amount      *string        `json:"amount,omitempty"`
+	TokenSymbol *string        `json:"token_symbol,omitempty"`
+	CreatedAt   time.Time      `json:"created_at"`
+	CompletedAt *time.Time     `json:"completed_at,omitempty"`
 }
 
 // IntentTimelineEvent represents a single event in the intent's timeline
