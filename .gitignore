@@ -48,6 +48,7 @@ Thumbs.db
 # Temporary files
 tmp/
 temp/
+debt-todo/
 
 # PostgreSQL data (if running locally)
 postgres_data/
