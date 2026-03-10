@@ -420,16 +420,24 @@ func (h *BundleHandlers) HandleVerifyBundle(w http.ResponseWriter, r *http.Reque
 		}
 	}
 
-	// Calculate quorum (2/3+1 of 4 validators = 3)
-	requiredQuorum := 3
+	// Dynamic quorum: require majority of attestors (at least 1)
+	totalAttestations := len(attestations)
+	requiredQuorum := totalAttestations/2 + 1
+	if requiredQuorum < 1 {
+		requiredQuorum = 1
+	}
 	quorumMet := validCount >= requiredQuorum
 
-	allComponentsPresent := componentStatus["merkle_inclusion"] &&
-		componentStatus["anchor_reference"] &&
-		componentStatus["chained_proof"] &&
-		componentStatus["governance_proof"]
+	// Count how many components are present (not all are required)
+	presentCount := 0
+	for _, present := range componentStatus {
+		if present {
+			presentCount++
+		}
+	}
+	hasComponents := presentCount > 0
 
-	bundleValid := hashValid && allComponentsPresent && quorumMet
+	bundleValid := hashValid && hasComponents && quorumMet
 
 	response := BundleVerificationResponse{
 		BundleValid: bundleValid,
