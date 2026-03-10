@@ -1106,7 +1106,8 @@ type LegProofDetail struct {
 	Status      string         `json:"status"`
 	ProofID     *uuid.UUID     `json:"proof_id,omitempty"`
 	Proof       *ProofArtifact `json:"proof,omitempty"`
-	AnchorTxHash *string       `json:"anchor_tx_hash,omitempty"`
+	AnchorTxHash    *string    `json:"anchor_tx_hash,omitempty"`
+	ExecutionTxHash *string    `json:"execution_tx_hash,omitempty"`
 	FromAddress *string        `json:"from_address,omitempty"`
 	ToAddress   *string        `json:"to_address,omitempty"`
 	Amount      *string        `json:"amount,omitempty"`

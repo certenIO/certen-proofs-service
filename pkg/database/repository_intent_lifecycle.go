@@ -101,7 +101,7 @@ func (r *IntentLifecycleRepository) ListRecentEnriched(ctx context.Context, limi
 		    FROM batch_transactions bt2
 		    WHERE bt2.intent_id = il.intent_id
 		) bt_agg ON TRUE
-		ORDER BY il.intent_id, il.created_at DESC
+		ORDER BY il.intent_id, bt.id ASC NULLS LAST
 	`
 
 	// Wrap with outer query to apply limit and final ordering
@@ -137,7 +137,7 @@ func (r *IntentLifecycleRepository) ListByUserEnriched(ctx context.Context, user
 		    WHERE bt2.intent_id = il.intent_id
 		) bt_agg ON TRUE
 		WHERE il.user_id = $1
-		ORDER BY il.intent_id, il.created_at DESC
+		ORDER BY il.intent_id, bt.id ASC NULLS LAST
 	`
 
 	wrappedQuery := fmt.Sprintf(`SELECT * FROM (%s) sub ORDER BY created_at DESC LIMIT $2`, query)
@@ -172,7 +172,7 @@ func (r *IntentLifecycleRepository) ListByStatus(ctx context.Context, status Int
 		    WHERE bt2.intent_id = il.intent_id
 		) bt_agg ON TRUE
 		WHERE il.status = $1
-		ORDER BY il.intent_id, il.created_at DESC
+		ORDER BY il.intent_id, bt.id ASC NULLS LAST
 	`
 
 	wrappedQuery := fmt.Sprintf(`SELECT * FROM (%s) sub ORDER BY created_at DESC LIMIT $2`, query)

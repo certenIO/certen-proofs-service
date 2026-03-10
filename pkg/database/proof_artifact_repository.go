@@ -3125,18 +3125,26 @@ func (r *ProofArtifactRepository) GetLegsByIntentID(ctx context.Context, intentI
 	}
 
 	// Fallback: synthesize leg data from batch_transactions (different to_chain values)
+	// Join proof_artifacts by matching chain name to chain ID for the external tx hash
 	query := `
 		SELECT DISTINCT ON (bt.to_chain)
 			   bt.to_chain, bt.from_address, bt.to_address, bt.amount, bt.token_symbol,
 			   COALESCE(pa.status, ab.status, 'pending') AS status,
-			   pa.proof_id, ar.anchor_tx_hash,
+			   pa.proof_id, pa.anchor_tx_hash,
 			   bt.created_at
 		FROM batch_transactions bt
 		LEFT JOIN anchor_batches ab ON bt.batch_id = ab.id
-		LEFT JOIN anchor_records ar ON ab.id = ar.batch_id
 		LEFT JOIN proof_artifacts pa ON bt.intent_id = pa.intent_id
+			AND pa.anchor_chain = CASE bt.to_chain
+				WHEN 'ethereum-sepolia' THEN '11155111'
+				WHEN 'arbitrum-sepolia' THEN '421614'
+				WHEN 'base-sepolia' THEN '84532'
+				WHEN 'optimism-sepolia' THEN '11155420'
+				WHEN 'near-testnet' THEN '398'
+				WHEN 'polygon-amoy' THEN '80002'
+			END
 		WHERE bt.intent_id = $1
-		ORDER BY bt.to_chain, ar.confirmations DESC NULLS LAST`
+		ORDER BY bt.to_chain, bt.id ASC`
 
 	rows, err := r.db.QueryContext(ctx, query, intentID)
 	if err != nil {
@@ -3182,6 +3190,7 @@ func (r *ProofArtifactRepository) GetLegsByIntentID(ctx context.Context, intentI
 		}
 		if anchorTxHash.Valid {
 			lp.AnchorTxHash = &anchorTxHash.String
+			lp.ExecutionTxHash = &anchorTxHash.String
 		}
 		lp.CreatedAt = createdAt
 		lp.LegID = uuid.NewSHA1(uuid.NameSpaceURL, []byte(fmt.Sprintf("%s:leg:%d", intentID, idx)))
@@ -3606,7 +3615,7 @@ func (r *ProofArtifactRepository) SearchAuditTrail(ctx context.Context, filter *
 				WHERE bt2.intent_id = bt.intent_id
 			) bt_agg ON TRUE
 			%s
-			ORDER BY bt.intent_id, ar.confirmations DESC NULLS LAST, pa.gov_level DESC NULLS LAST
+			ORDER BY bt.intent_id, bt.id ASC, ar.confirmations DESC NULLS LAST, pa.gov_level DESC NULLS LAST
 		) sub
 		ORDER BY %s %s
 		LIMIT $%d OFFSET $%d`, whereClause, sortBy, sortOrder, argIndex, argIndex+1)
