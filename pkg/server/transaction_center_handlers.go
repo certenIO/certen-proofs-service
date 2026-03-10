@@ -150,6 +150,44 @@ func (h *TransactionCenterHandlers) HandleGetIntentAttestations(w http.ResponseW
 }
 
 // ============================================================================
+// INTENT LEGS ENDPOINT
+// ============================================================================
+
+// HandleGetIntentLegs handles GET /api/v1/intents/{intentId}/legs
+func (h *TransactionCenterHandlers) HandleGetIntentLegs(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		h.writeError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Only GET is allowed")
+		return
+	}
+
+	path := strings.TrimPrefix(r.URL.Path, "/api/v1/intents/")
+	parts := strings.Split(path, "/")
+	if len(parts) < 2 || parts[1] != "legs" {
+		h.writeError(w, http.StatusBadRequest, "INVALID_PATH", "Invalid path format")
+		return
+	}
+	intentID := parts[0]
+	if intentID == "" {
+		h.writeError(w, http.StatusBadRequest, "INVALID_INTENT_ID", "Intent ID is required")
+		return
+	}
+
+	ctx := r.Context()
+	legs, err := h.repos.ProofArtifacts.GetLegsByIntentID(ctx, intentID)
+	if err != nil {
+		h.logger.Printf("Error getting intent legs: %v", err)
+		h.writeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to retrieve legs")
+		return
+	}
+
+	h.writeJSON(w, http.StatusOK, map[string]interface{}{
+		"intent_id": intentID,
+		"legs":      legs,
+		"count":     len(legs),
+	})
+}
+
+// ============================================================================
 // USER INTENTS ENDPOINT
 // ============================================================================
 
@@ -227,6 +265,9 @@ func (h *TransactionCenterHandlers) HandleSearchAuditTrail(w http.ResponseWriter
 	if v := r.URL.Query().Get("to_chain"); v != "" {
 		filter.ToChain = &v
 	}
+	if v := r.URL.Query().Get("target_chain"); v != "" {
+		filter.TargetChain = &v
+	}
 	if v := r.URL.Query().Get("token_symbol"); v != "" {
 		filter.TokenSymbol = &v
 	}
@@ -282,6 +323,8 @@ func (h *TransactionCenterHandlers) HandleIntentRouting(w http.ResponseWriter, r
 		h.HandleGetIntentTimeline(w, r)
 	case strings.HasSuffix(path, "/attestations"):
 		h.HandleGetIntentAttestations(w, r)
+	case strings.HasSuffix(path, "/legs"):
+		h.HandleGetIntentLegs(w, r)
 	default:
 		h.writeError(w, http.StatusNotFound, "NOT_FOUND", "Endpoint not found")
 	}

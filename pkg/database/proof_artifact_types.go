@@ -1043,6 +1043,10 @@ type IntentSummary struct {
 	TokenSymbol *string `json:"token_symbol,omitempty" db:"token_symbol"`
 	AdiURL      *string `json:"adi_url,omitempty" db:"adi_url"`
 
+	// Multi-leg metadata
+	LegCount  int      `json:"leg_count,omitempty"`
+	AllChains []string `json:"all_chains,omitempty"`
+
 	// Status
 	Status           string  `json:"status" db:"status"`
 	GovernanceLevel  *string `json:"governance_level,omitempty" db:"governance_level"`
@@ -1171,8 +1175,9 @@ type IntentFilter struct {
 	IntentID *string `json:"intent_id,omitempty"`
 
 	// Chain filters
-	FromChain *string `json:"from_chain,omitempty"`
-	ToChain   *string `json:"to_chain,omitempty"`
+	FromChain   *string `json:"from_chain,omitempty"`
+	ToChain     *string `json:"to_chain,omitempty"`
+	TargetChain *string `json:"target_chain,omitempty"` // Matches any leg's chain
 
 	// Token filter
 	TokenSymbol *string `json:"token_symbol,omitempty"`

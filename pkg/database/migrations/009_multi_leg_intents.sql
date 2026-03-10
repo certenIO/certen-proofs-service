@@ -1,6 +1,6 @@
 -- ============================================================================
 -- CERTEN MULTI-LEG INTENTS SCHEMA
--- Migration: 007_multi_leg_intents
+-- Migration: 009_multi_leg_intents
 -- Version: 1.0.0
 -- Description: Support for multi-leg intents - single user intent with multiple
 --              independent legs targeting same or different chains
@@ -583,7 +583,7 @@ COMMENT ON COLUMN intent_chain_groups.chain_key IS 'Unique key for chain (e.g., 
 -- ============================================================================
 
 INSERT INTO schema_migrations (version, description, applied_at)
-VALUES ('007', 'Multi-leg intents support', NOW())
+VALUES ('009', 'Multi-leg intents support', NOW())
 ON CONFLICT (version) DO NOTHING;
 
 COMMIT;

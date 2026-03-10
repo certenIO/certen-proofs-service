@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/lib/pq"
 )
 
 // ProofArtifactRepository provides access to proof artifact storage
@@ -3114,6 +3115,84 @@ func (r *ProofArtifactRepository) getLegProofsForIntent(ctx context.Context, int
 	return legProofs, nil
 }
 
+// GetLegsByIntentID returns per-leg data for an intent.
+// First tries intent_legs table, falls back to batch_transactions grouped by to_chain.
+func (r *ProofArtifactRepository) GetLegsByIntentID(ctx context.Context, intentID string) ([]LegProofDetail, error) {
+	// Try intent_legs table first
+	legs, err := r.getLegProofsForIntent(ctx, intentID)
+	if err == nil && len(legs) > 0 {
+		return legs, nil
+	}
+
+	// Fallback: synthesize leg data from batch_transactions (different to_chain values)
+	query := `
+		SELECT DISTINCT ON (bt.to_chain)
+			   bt.to_chain, bt.from_address, bt.to_address, bt.amount, bt.token_symbol,
+			   COALESCE(pa.status, ab.status, 'pending') AS status,
+			   pa.proof_id, ar.anchor_tx_hash,
+			   bt.created_at
+		FROM batch_transactions bt
+		LEFT JOIN anchor_batches ab ON bt.batch_id = ab.id
+		LEFT JOIN anchor_records ar ON ab.id = ar.batch_id
+		LEFT JOIN proof_artifacts pa ON bt.intent_id = pa.intent_id
+		WHERE bt.intent_id = $1
+		ORDER BY bt.to_chain, ar.confirmations DESC NULLS LAST`
+
+	rows, err := r.db.QueryContext(ctx, query, intentID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query legs from batch_transactions: %w", err)
+	}
+	defer rows.Close()
+
+	var result []LegProofDetail
+	idx := 0
+	for rows.Next() {
+		var lp LegProofDetail
+		var toChain, fromAddr, toAddr, amount, tokenSym sql.NullString
+		var status string
+		var proofID *uuid.UUID
+		var anchorTxHash sql.NullString
+		var createdAt time.Time
+
+		if err := rows.Scan(&toChain, &fromAddr, &toAddr, &amount, &tokenSym,
+			&status, &proofID, &anchorTxHash, &createdAt); err != nil {
+			return nil, fmt.Errorf("failed to scan leg: %w", err)
+		}
+
+		lp.LegIndex = idx
+		if toChain.Valid {
+			lp.TargetChain = toChain.String
+		}
+		lp.Role = "destination"
+		lp.Status = status
+		if fromAddr.Valid {
+			lp.FromAddress = &fromAddr.String
+		}
+		if toAddr.Valid {
+			lp.ToAddress = &toAddr.String
+		}
+		if amount.Valid {
+			lp.Amount = &amount.String
+		}
+		if tokenSym.Valid {
+			lp.TokenSymbol = &tokenSym.String
+		}
+		if proofID != nil {
+			lp.ProofID = proofID
+		}
+		if anchorTxHash.Valid {
+			lp.AnchorTxHash = &anchorTxHash.String
+		}
+		lp.CreatedAt = createdAt
+		lp.LegID = uuid.NewSHA1(uuid.NameSpaceURL, []byte(fmt.Sprintf("%s:leg:%d", intentID, idx)))
+
+		result = append(result, lp)
+		idx++
+	}
+
+	return result, nil
+}
+
 // GetTimelineByIntentID generates timeline events from proof_artifacts and anchor_batches
 // Since custody_chain_events table doesn't exist, we synthesize events from status timestamps
 func (r *ProofArtifactRepository) GetTimelineByIntentID(ctx context.Context, intentID string) ([]IntentTimelineEvent, error) {
@@ -3422,6 +3501,11 @@ func (r *ProofArtifactRepository) SearchAuditTrail(ctx context.Context, filter *
 		args = append(args, *filter.ToChain)
 		argIndex++
 	}
+	if filter.TargetChain != nil {
+		conditions = append(conditions, fmt.Sprintf("(bt.from_chain = $%d OR bt.to_chain = $%d)", argIndex, argIndex))
+		args = append(args, *filter.TargetChain)
+		argIndex++
+	}
 	if filter.TokenSymbol != nil {
 		conditions = append(conditions, fmt.Sprintf("bt.token_symbol = $%d", argIndex))
 		args = append(args, *filter.TokenSymbol)
@@ -3491,7 +3575,8 @@ func (r *ProofArtifactRepository) SearchAuditTrail(ctx context.Context, filter *
 			   anchor_tx_hash, anchor_confirmations, anchor_is_final,
 			   proof_id, batch_id,
 			   lifecycle_status, completed_at, failed_at,
-			   created_at, created_at_client
+			   created_at, created_at_client,
+			   leg_count, all_chains
 		FROM (
 			SELECT DISTINCT ON (bt.intent_id)
 				   COALESCE(bt.intent_id, '') AS intent_id,
@@ -3506,12 +3591,20 @@ func (r *ProofArtifactRepository) SearchAuditTrail(ctx context.Context, filter *
 				   COALESCE(ar.is_final, FALSE) AS anchor_is_final,
 				   pa.proof_id, bt.batch_id,
 				   il.status AS lifecycle_status, il.completed_at, il.failed_at,
-				   COALESCE(bt.created_at, NOW()) AS created_at, bt.created_at_client
+				   COALESCE(bt.created_at, NOW()) AS created_at, bt.created_at_client,
+				   COALESCE(bt_agg.leg_count, 1)::int AS leg_count,
+				   bt_agg.all_chains
 			FROM batch_transactions bt
 			LEFT JOIN anchor_batches ab ON bt.batch_id = ab.id
 			LEFT JOIN anchor_records ar ON ab.id = ar.batch_id
 			LEFT JOIN proof_artifacts pa ON bt.intent_id = pa.intent_id
 			LEFT JOIN intent_lifecycle il ON bt.intent_id = il.intent_id
+			LEFT JOIN LATERAL (
+				SELECT COUNT(DISTINCT bt2.to_chain) AS leg_count,
+					   ARRAY_AGG(DISTINCT bt2.to_chain) FILTER (WHERE bt2.to_chain IS NOT NULL) AS all_chains
+				FROM batch_transactions bt2
+				WHERE bt2.intent_id = bt.intent_id
+			) bt_agg ON TRUE
 			%s
 			ORDER BY bt.intent_id, ar.confirmations DESC NULLS LAST, pa.gov_level DESC NULLS LAST
 		) sub
@@ -3538,6 +3631,7 @@ func (r *ProofArtifactRepository) SearchAuditTrail(ctx context.Context, filter *
 			&s.ProofID, &s.BatchID,
 			&s.LifecycleStatus, &s.CompletedAt, &s.FailedAt,
 			&s.CreatedAt, &s.CreatedAtClient,
+			&s.LegCount, pq.Array(&s.AllChains),
 		); err != nil {
 			return nil, fmt.Errorf("failed to scan audit result: %w", err)
 		}
