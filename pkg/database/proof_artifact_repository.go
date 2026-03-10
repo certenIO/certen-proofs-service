@@ -3559,15 +3559,7 @@ func (r *ProofArtifactRepository) SearchAuditTrail(ctx context.Context, filter *
 		sortBy = "status"
 	}
 
-	// Chain preference for DISTINCT ON ordering (prefer matching chain's leg)
-	chainPreferenceExpr := "0" // no preference by default
-	if filter.TargetChain != nil {
-		chainPreferenceExpr = fmt.Sprintf("CASE WHEN bt.to_chain = $%d THEN 0 ELSE 1 END", argIndex)
-		args = append(args, *filter.TargetChain)
-		argIndex++
-	}
-
-	// Count total (deduplicated by intent_id)
+	// Count total (deduplicated by intent_id) — uses only WHERE args
 	countQuery := fmt.Sprintf(`
 		SELECT COUNT(DISTINCT bt.intent_id)
 		FROM batch_transactions bt
@@ -3579,6 +3571,15 @@ func (r *ProofArtifactRepository) SearchAuditTrail(ctx context.Context, filter *
 	err := r.db.QueryRowContext(ctx, countQuery, args...).Scan(&totalCount)
 	if err != nil {
 		return nil, fmt.Errorf("failed to count audit results: %w", err)
+	}
+
+	// Chain preference for DISTINCT ON ordering (prefer matching chain's leg)
+	// Added AFTER count query so extra param doesn't pollute count args
+	chainPreferenceExpr := "" // empty — no preference by default
+	if filter.TargetChain != nil {
+		chainPreferenceExpr = fmt.Sprintf("CASE WHEN bt.to_chain = $%d THEN 0 ELSE 1 END,", argIndex)
+		args = append(args, *filter.TargetChain)
+		argIndex++
 	}
 
 	// Get results — DISTINCT ON deduplicates by intent_id, picking the row with
@@ -3623,7 +3624,7 @@ func (r *ProofArtifactRepository) SearchAuditTrail(ctx context.Context, filter *
 				WHERE bt2.intent_id = bt.intent_id
 			) bt_agg ON TRUE
 			%s
-			ORDER BY bt.intent_id, %s, bt.id ASC, ar.confirmations DESC NULLS LAST, pa.gov_level DESC NULLS LAST
+			ORDER BY bt.intent_id, %s bt.id ASC, ar.confirmations DESC NULLS LAST, pa.gov_level DESC NULLS LAST
 		) sub
 		ORDER BY %s %s
 		LIMIT $%d OFFSET $%d`, whereClause, chainPreferenceExpr, sortBy, sortOrder, argIndex, argIndex+1)
