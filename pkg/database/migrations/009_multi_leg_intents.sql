@@ -176,7 +176,7 @@ CREATE TABLE IF NOT EXISTS intent_legs (
 -- These reference tables from 001_initial_schema
 ALTER TABLE intent_legs
 ADD CONSTRAINT fk_intent_legs_batch
-FOREIGN KEY (batch_id) REFERENCES anchor_batches(batch_id) ON DELETE SET NULL;
+FOREIGN KEY (batch_id) REFERENCES anchor_batches(id) ON DELETE SET NULL;
 
 ALTER TABLE intent_legs
 ADD CONSTRAINT fk_intent_legs_anchor
@@ -236,7 +236,7 @@ CREATE TABLE IF NOT EXISTS intent_chain_groups (
     status              VARCHAR(30) NOT NULL DEFAULT 'pending',
 
     -- Anchoring for this group
-    batch_id            UUID REFERENCES anchor_batches(batch_id),
+    batch_id            UUID REFERENCES anchor_batches(id),
     anchor_id           UUID REFERENCES anchor_records(anchor_id),
     anchor_tx_hash      VARCHAR(256),
     anchor_block        BIGINT,
