@@ -3491,7 +3491,7 @@ func (r *ProofArtifactRepository) SearchAuditTrail(ctx context.Context, filter *
 
 	// Build conditions
 	if filter.UserID != nil {
-		conditions = append(conditions, fmt.Sprintf("bt.user_id = $%d", argIndex))
+		conditions = append(conditions, fmt.Sprintf("(bt.user_id = $%d OR bt.adi_url = $%d)", argIndex, argIndex))
 		args = append(args, *filter.UserID)
 		argIndex++
 	}
@@ -3559,6 +3559,14 @@ func (r *ProofArtifactRepository) SearchAuditTrail(ctx context.Context, filter *
 		sortBy = "status"
 	}
 
+	// Chain preference for DISTINCT ON ordering (prefer matching chain's leg)
+	chainPreferenceExpr := "0" // no preference by default
+	if filter.TargetChain != nil {
+		chainPreferenceExpr = fmt.Sprintf("CASE WHEN bt.to_chain = $%d THEN 0 ELSE 1 END", argIndex)
+		args = append(args, *filter.TargetChain)
+		argIndex++
+	}
+
 	// Count total (deduplicated by intent_id)
 	countQuery := fmt.Sprintf(`
 		SELECT COUNT(DISTINCT bt.intent_id)
@@ -3615,10 +3623,10 @@ func (r *ProofArtifactRepository) SearchAuditTrail(ctx context.Context, filter *
 				WHERE bt2.intent_id = bt.intent_id
 			) bt_agg ON TRUE
 			%s
-			ORDER BY bt.intent_id, bt.id ASC, ar.confirmations DESC NULLS LAST, pa.gov_level DESC NULLS LAST
+			ORDER BY bt.intent_id, %s, bt.id ASC, ar.confirmations DESC NULLS LAST, pa.gov_level DESC NULLS LAST
 		) sub
 		ORDER BY %s %s
-		LIMIT $%d OFFSET $%d`, whereClause, sortBy, sortOrder, argIndex, argIndex+1)
+		LIMIT $%d OFFSET $%d`, whereClause, chainPreferenceExpr, sortBy, sortOrder, argIndex, argIndex+1)
 
 	args = append(args, filter.Limit, filter.Offset)
 
