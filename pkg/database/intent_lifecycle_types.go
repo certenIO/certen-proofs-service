@@ -39,11 +39,13 @@ type IntentLifecycle struct {
 // IntentLifecycleEnriched extends IntentLifecycle with transaction metadata from batch_transactions
 type IntentLifecycleEnriched struct {
 	IntentLifecycle
-	FromChain   *string `json:"from_chain,omitempty"`
-	ToChain     *string `json:"to_chain,omitempty"`
-	FromAddress *string `json:"from_address,omitempty"`
-	ToAddress   *string `json:"to_address,omitempty"`
-	Amount      *string `json:"amount,omitempty"`
-	TokenSymbol *string `json:"token_symbol,omitempty"`
-	AccountURL  *string `json:"account_url,omitempty"`
+	FromChain   *string  `json:"from_chain,omitempty"`
+	ToChain     *string  `json:"to_chain,omitempty"`
+	FromAddress *string  `json:"from_address,omitempty"`
+	ToAddress   *string  `json:"to_address,omitempty"`
+	Amount      *string  `json:"amount,omitempty"`
+	TokenSymbol *string  `json:"token_symbol,omitempty"`
+	AccountURL  *string  `json:"account_url,omitempty"`
+	LegCount    int      `json:"leg_count,omitempty"`
+	AllChains   []string `json:"all_chains,omitempty"`
 }

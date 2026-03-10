@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+
+	"github.com/lib/pq"
 )
 
 // IntentLifecycleRepository handles read-only queries for intent lifecycle tracking
@@ -89,9 +91,16 @@ func (r *IntentLifecycleRepository) ListRecentEnriched(ctx context.Context, limi
 		       il.created_at, il.updated_at, il.submitted_at, il.authorized_at,
 		       il.in_process_at, il.completed_at, il.failed_at,
 		       bt.from_chain, bt.to_chain, bt.from_address, bt.to_address,
-		       bt.amount, bt.token_symbol, bt.account_url
+		       bt.amount, bt.token_symbol, bt.account_url,
+		       COALESCE(bt_agg.leg_count, 0), bt_agg.all_chains
 		FROM intent_lifecycle il
 		LEFT JOIN batch_transactions bt ON bt.intent_id = il.intent_id
+		LEFT JOIN LATERAL (
+		    SELECT COUNT(DISTINCT bt2.to_chain) AS leg_count,
+		           ARRAY_AGG(DISTINCT bt2.to_chain) FILTER (WHERE bt2.to_chain IS NOT NULL) AS all_chains
+		    FROM batch_transactions bt2
+		    WHERE bt2.intent_id = il.intent_id
+		) bt_agg ON TRUE
 		ORDER BY il.intent_id, il.created_at DESC
 	`
 
@@ -117,9 +126,16 @@ func (r *IntentLifecycleRepository) ListByUserEnriched(ctx context.Context, user
 		       il.created_at, il.updated_at, il.submitted_at, il.authorized_at,
 		       il.in_process_at, il.completed_at, il.failed_at,
 		       bt.from_chain, bt.to_chain, bt.from_address, bt.to_address,
-		       bt.amount, bt.token_symbol, bt.account_url
+		       bt.amount, bt.token_symbol, bt.account_url,
+		       COALESCE(bt_agg.leg_count, 0), bt_agg.all_chains
 		FROM intent_lifecycle il
 		LEFT JOIN batch_transactions bt ON bt.intent_id = il.intent_id
+		LEFT JOIN LATERAL (
+		    SELECT COUNT(DISTINCT bt2.to_chain) AS leg_count,
+		           ARRAY_AGG(DISTINCT bt2.to_chain) FILTER (WHERE bt2.to_chain IS NOT NULL) AS all_chains
+		    FROM batch_transactions bt2
+		    WHERE bt2.intent_id = il.intent_id
+		) bt_agg ON TRUE
 		WHERE il.user_id = $1
 		ORDER BY il.intent_id, il.created_at DESC
 	`
@@ -145,9 +161,16 @@ func (r *IntentLifecycleRepository) ListByStatus(ctx context.Context, status Int
 		       il.created_at, il.updated_at, il.submitted_at, il.authorized_at,
 		       il.in_process_at, il.completed_at, il.failed_at,
 		       bt.from_chain, bt.to_chain, bt.from_address, bt.to_address,
-		       bt.amount, bt.token_symbol, bt.account_url
+		       bt.amount, bt.token_symbol, bt.account_url,
+		       COALESCE(bt_agg.leg_count, 0), bt_agg.all_chains
 		FROM intent_lifecycle il
 		LEFT JOIN batch_transactions bt ON bt.intent_id = il.intent_id
+		LEFT JOIN LATERAL (
+		    SELECT COUNT(DISTINCT bt2.to_chain) AS leg_count,
+		           ARRAY_AGG(DISTINCT bt2.to_chain) FILTER (WHERE bt2.to_chain IS NOT NULL) AS all_chains
+		    FROM batch_transactions bt2
+		    WHERE bt2.intent_id = il.intent_id
+		) bt_agg ON TRUE
 		WHERE il.status = $1
 		ORDER BY il.intent_id, il.created_at DESC
 	`
@@ -175,6 +198,7 @@ func (r *IntentLifecycleRepository) scanEnrichedRows(ctx context.Context, query 
 			&e.InProcessAt, &e.CompletedAt, &e.FailedAt,
 			&e.FromChain, &e.ToChain, &e.FromAddress, &e.ToAddress,
 			&e.Amount, &e.TokenSymbol, &e.AccountURL,
+			&e.LegCount, pq.Array(&e.AllChains),
 		); err != nil {
 			return nil, fmt.Errorf("scan enriched intent lifecycle row: %w", err)
 		}
