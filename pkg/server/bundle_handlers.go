@@ -399,6 +399,19 @@ func (h *BundleHandlers) HandleVerifyBundle(w http.ResponseWriter, r *http.Reque
 	computedHash := sha256.Sum256(jsonData)
 	hashValid := bytes.Equal(computedHash[:], bundle.BundleHash)
 
+	// Handle legacy hash mismatch: older bundles stored hash of pretty-printed
+	// JSON while bundle_data contains compact JSON. If compact hash doesn't match,
+	// try re-hashing with indented format as a fallback.
+	if !hashValid {
+		var prettyBuf bytes.Buffer
+		if json.Indent(&prettyBuf, jsonData, "", "  ") == nil {
+			prettyHash := sha256.Sum256(prettyBuf.Bytes())
+			if bytes.Equal(prettyHash[:], bundle.BundleHash) {
+				hashValid = true
+			}
+		}
+	}
+
 	// Parse bundle to verify components
 	var bundleContent map[string]interface{}
 	componentStatus := make(map[string]bool)
