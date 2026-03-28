@@ -530,6 +530,7 @@ func (r *ProofArtifactRepository) GetChainedProofLayers(ctx context.Context, pro
 			   bvn_partition, receipt_anchor,
 			   bvn_root, dn_root, anchor_sequence, bvn_partition_id,
 			   dn_block_hash, dn_block_height, consensus_timestamp,
+			   source_hash, target_hash, receipt_entries,
 			   COALESCE(layer_json, '{}'::jsonb) as layer_json, verified, verified_at, created_at
 		FROM chained_proof_layers
 		WHERE proof_id = $1
@@ -549,6 +550,7 @@ func (r *ProofArtifactRepository) GetChainedProofLayers(ctx context.Context, pro
 			&l.BVNPartition, &l.ReceiptAnchor,
 			&l.BVNRoot, &l.DNRoot, &l.AnchorSequence, &l.BVNPartitionID,
 			&l.DNBlockHash, &l.DNBlockHeight, &l.ConsensusTimestamp,
+			&l.SourceHash, &l.TargetHash, &l.ReceiptEntries,
 			&l.LayerJSON, &l.Verified, &l.VerifiedAt, &l.CreatedAt,
 		); err != nil {
 			return nil, fmt.Errorf("failed to scan chained proof layer: %w", err)

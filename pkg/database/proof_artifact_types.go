@@ -164,6 +164,11 @@ type ChainedProofLayer struct {
 	DNBlockHeight      *int64     `json:"dn_block_height,omitempty" db:"dn_block_height"`
 	ConsensusTimestamp *time.Time `json:"consensus_timestamp,omitempty" db:"consensus_timestamp"`
 
+	// Merkle Receipt Path
+	SourceHash     []byte          `json:"source_hash,omitempty" db:"source_hash"`
+	TargetHash     []byte          `json:"target_hash,omitempty" db:"target_hash"`
+	ReceiptEntries json.RawMessage `json:"receipt_entries,omitempty" db:"receipt_entries"`
+
 	// Full Layer Artifact
 	LayerJSON json.RawMessage `json:"layer_json" db:"layer_json"`
 
