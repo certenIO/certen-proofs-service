@@ -103,6 +103,12 @@ func (h *ProofHandlers) HandleGetProofByID(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
+	// Debug: log chained layer receipt data
+	for i, layer := range proof.ChainedLayers {
+		h.logger.Printf("[DEBUG-LAYER] L%d: source_hash=%d bytes, target_hash=%d bytes, receipt_entries=%d bytes",
+			i+1, len(layer.SourceHash), len(layer.TargetHash), len(layer.ReceiptEntries))
+	}
+
 	h.writeJSON(w, http.StatusOK, proof)
 }
 
