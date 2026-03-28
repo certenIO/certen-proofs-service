@@ -545,16 +545,21 @@ func (r *ProofArtifactRepository) GetChainedProofLayers(ctx context.Context, pro
 	var layers []ChainedProofLayer
 	for rows.Next() {
 		var l ChainedProofLayer
+		var sourceHash, targetHash []byte
+		var receiptEntries json.RawMessage
 		if err := rows.Scan(
 			&l.LayerID, &l.ProofID, &l.LayerNumber, &l.LayerName,
 			&l.BVNPartition, &l.ReceiptAnchor,
 			&l.BVNRoot, &l.DNRoot, &l.AnchorSequence, &l.BVNPartitionID,
 			&l.DNBlockHash, &l.DNBlockHeight, &l.ConsensusTimestamp,
-			&l.SourceHash, &l.TargetHash, &l.ReceiptEntries,
+			&sourceHash, &targetHash, &receiptEntries,
 			&l.LayerJSON, &l.Verified, &l.VerifiedAt, &l.CreatedAt,
 		); err != nil {
 			return nil, fmt.Errorf("failed to scan chained proof layer: %w", err)
 		}
+		l.SourceHash = sourceHash
+		l.TargetHash = targetHash
+		l.ReceiptEntries = receiptEntries
 		layers = append(layers, l)
 	}
 
