@@ -165,9 +165,9 @@ type ChainedProofLayer struct {
 	ConsensusTimestamp *time.Time `json:"consensus_timestamp,omitempty" db:"consensus_timestamp"`
 
 	// Merkle Receipt Path
-	SourceHash     []byte          `json:"source_hash,omitempty" db:"source_hash"`
-	TargetHash     []byte          `json:"target_hash,omitempty" db:"target_hash"`
-	ReceiptEntries json.RawMessage `json:"receipt_entries,omitempty" db:"receipt_entries"`
+	SourceHash     []byte          `json:"source_hash" db:"source_hash"`
+	TargetHash     []byte          `json:"target_hash" db:"target_hash"`
+	ReceiptEntries json.RawMessage `json:"receipt_entries" db:"receipt_entries"`
 
 	// Full Layer Artifact
 	LayerJSON json.RawMessage `json:"layer_json" db:"layer_json"`
