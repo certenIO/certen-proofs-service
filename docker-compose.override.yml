@@ -16,7 +16,7 @@ services:
 
   proof-service:
     environment:
-      DATABASE_URL: postgres://certen:certen_testnet_2026@certen-postgres:5432/certen_proofs?sslmode=disable
+      DATABASE_URL: ${PROOFS_DATABASE_URL}
       CORS_ORIGINS: "http://localhost:3000,http://localhost:3001,https://certen-web.web.app,https://certen-web.firebaseapp.com,*"
       PROOFS_SERVICE_TOKEN_SECRET_V1: ${PROOFS_SERVICE_TOKEN_SECRET_V1:-}
     networks:
