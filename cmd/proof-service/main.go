@@ -145,8 +145,11 @@ func main() {
 		}
 	})
 
-	// Wrap with CORS middleware
-	handler := corsMiddleware(cfg.CORSOrigins)(mux)
+	// Wrap with auth (dual-mode, log-only until AUTH_REQUIRED=true) + CORS.
+	// Auth is outermost so it can short-circuit before CORS, while still letting
+	// preflight + public paths through.
+	logAuthStatus(logger)
+	handler := authMiddleware(logger)(corsMiddleware(cfg.CORSOrigins)(mux))
 
 	// Create HTTP server
 	srv := &http.Server{
