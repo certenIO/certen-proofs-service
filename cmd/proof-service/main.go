@@ -39,6 +39,11 @@ func main() {
 			log.Fatalf("Configuration validation failed: %v", err)
 		}
 		log.Println("Running in DEVELOPMENT mode - relaxed security validation")
+	} else {
+		// Production: always run the strict validator (it was previously never called).
+		if err := cfg.Validate(); err != nil {
+			log.Fatalf("Configuration validation failed: %v", err)
+		}
 	}
 
 	// Set up logging
@@ -198,10 +203,12 @@ func corsMiddleware(allowedOrigins []string) func(http.Handler) http.Handler {
 				return
 			}
 
-			// Check if origin is allowed
+			// Check if origin is allowed. Exact match ONLY — never reflect an
+			// arbitrary Origin (a "*" entry would otherwise echo any caller's
+			// Origin back, which is worse than a plain wildcard).
 			allowed := false
 			for _, o := range allowedOrigins {
-				if o == "*" || o == origin {
+				if o == origin {
 					allowed = true
 					break
 				}
