@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 )
@@ -89,14 +90,17 @@ func TestVerifyFirebaseIDToken(t *testing.T) {
 
 	t.Run("tampered signature", func(t *testing.T) {
 		tok := signTestToken(t, priv, kid, validClaims(project))
-		// flip the last char of the signature segment
-		b := []byte(tok)
-		if b[len(b)-1] == 'A' {
-			b[len(b)-1] = 'B'
-		} else {
-			b[len(b)-1] = 'A'
+		parts := strings.Split(tok, ".")
+		// Decode the signature, flip a byte, re-encode — guarantees a changed
+		// signature (flipping a trailing base64 char can be a no-op due to
+		// padding bits).
+		sigBytes, err := base64.RawURLEncoding.DecodeString(parts[2])
+		if err != nil {
+			t.Fatal(err)
 		}
-		uid, reason := verifyFirebaseIDToken(string(b))
+		sigBytes[0] ^= 0xFF
+		tampered := parts[0] + "." + parts[1] + "." + base64.RawURLEncoding.EncodeToString(sigBytes)
+		uid, reason := verifyFirebaseIDToken(tampered)
 		if uid != "" || reason != "signature-invalid" {
 			t.Fatalf("expected signature-invalid, got uid=%q reason=%q", uid, reason)
 		}
