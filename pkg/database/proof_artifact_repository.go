@@ -733,6 +733,46 @@ func (r *ProofArtifactRepository) GetProofAttestationsByProof(ctx context.Contex
 	return attestations, nil
 }
 
+// GetProofAttestationsByProofs retrieves attestations for many proofs in a
+// single query, returning them keyed by proof_id. Used by bulk export to avoid
+// an N+1 (one attestation query per exported proof).
+func (r *ProofArtifactRepository) GetProofAttestationsByProofs(ctx context.Context, proofIDs []uuid.UUID) (map[uuid.UUID][]ProofAttestation, error) {
+	result := make(map[uuid.UUID][]ProofAttestation)
+	if len(proofIDs) == 0 {
+		return result, nil
+	}
+
+	query := `
+		SELECT attestation_id, proof_id, batch_id, validator_id, validator_pubkey,
+			   attested_hash, signature, anchor_tx_hash, merkle_root, block_number,
+			   signature_valid, verified_at, attested_at, created_at
+		FROM validator_attestations
+		WHERE proof_id = ANY($1)
+		ORDER BY proof_id, attested_at`
+
+	rows, err := r.db.QueryContext(ctx, query, pq.Array(proofIDs))
+	if err != nil {
+		return nil, fmt.Errorf("failed to query attestations: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var a ProofAttestation
+		if err := rows.Scan(
+			&a.AttestationID, &a.ProofArtifactID, &a.BatchID, &a.ValidatorID, &a.ValidatorPubkey,
+			&a.AttestedHash, &a.Signature, &a.AnchorTxHash, &a.MerkleRoot, &a.BlockNumber,
+			&a.SignatureValid, &a.VerifiedAt, &a.AttestedAt, &a.CreatedAt,
+		); err != nil {
+			return nil, fmt.Errorf("failed to scan attestation: %w", err)
+		}
+		if a.ProofArtifactID != nil {
+			result[*a.ProofArtifactID] = append(result[*a.ProofArtifactID], a)
+		}
+	}
+
+	return result, nil
+}
+
 // GetProofAttestationsByBatch retrieves all attestations for a batch
 func (r *ProofArtifactRepository) GetProofAttestationsByBatch(ctx context.Context, batchID uuid.UUID) ([]ProofAttestation, error) {
 	query := `

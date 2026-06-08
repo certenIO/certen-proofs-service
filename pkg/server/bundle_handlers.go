@@ -601,7 +601,10 @@ func (h *BundleHandlers) HandleVerifyMerkle(w http.ResponseWriter, r *http.Reque
 	}
 
 	computedRoot := hex.EncodeToString(currentHash)
-	valid := computedRoot == req.MerkleRoot
+	// Compare the decoded BYTES, not the raw user-supplied string: hex is
+	// case-insensitive, so a correct-but-uppercase root would otherwise read
+	// as invalid (and a string compare is the wrong primitive for a hash).
+	valid := bytes.Equal(currentHash, rootBytes)
 
 	h.writeJSON(w, http.StatusOK, MerkleVerificationResponse{
 		Valid:        valid,
@@ -773,10 +776,17 @@ func (rl *RateLimiter) Allow(clientID string) bool {
 // API KEY VALIDATOR
 // =============================================================================
 
+// cachedAPIKey is a cache entry with its own expiry so revocations and key
+// expiry take effect within cacheTTL instead of living until process restart.
+type cachedAPIKey struct {
+	key       *database.APIKey
+	expiresAt time.Time
+}
+
 // APIKeyValidator validates API keys
 type APIKeyValidator struct {
 	repos    *database.Repositories
-	cache    map[string]*database.APIKey
+	cache    map[string]*cachedAPIKey
 	cacheMu  sync.RWMutex
 	cacheTTL time.Duration
 }
@@ -785,7 +795,7 @@ type APIKeyValidator struct {
 func NewAPIKeyValidator(repos *database.Repositories) *APIKeyValidator {
 	return &APIKeyValidator{
 		repos:    repos,
-		cache:    make(map[string]*database.APIKey),
+		cache:    make(map[string]*cachedAPIKey),
 		cacheTTL: 5 * time.Minute,
 	}
 }
@@ -796,12 +806,13 @@ func (v *APIKeyValidator) Validate(ctx context.Context, apiKeyHeader string) (*d
 		return nil, fmt.Errorf("API key is required")
 	}
 
-	// Check cache first
+	// Check cache first — honoring the per-entry TTL so a revoked or expired
+	// key can't stay valid in memory indefinitely.
 	v.cacheMu.RLock()
 	cached, ok := v.cache[apiKeyHeader]
 	v.cacheMu.RUnlock()
-	if ok && cached != nil {
-		return cached, nil
+	if ok && cached != nil && time.Now().Before(cached.expiresAt) {
+		return cached.key, nil
 	}
 
 	// Hash the API key for lookup
@@ -820,9 +831,9 @@ func (v *APIKeyValidator) Validate(ctx context.Context, apiKeyHeader string) (*d
 		return nil, fmt.Errorf("API key has expired")
 	}
 
-	// Cache the valid key
+	// Cache the valid key with an expiry.
 	v.cacheMu.Lock()
-	v.cache[apiKeyHeader] = keyRecord
+	v.cache[apiKeyHeader] = &cachedAPIKey{key: keyRecord, expiresAt: time.Now().Add(v.cacheTTL)}
 	v.cacheMu.Unlock()
 
 	// Update last used timestamp

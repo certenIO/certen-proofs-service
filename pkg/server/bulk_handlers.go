@@ -70,7 +70,7 @@ func NewBulkHandlers(
 		}
 	}
 
-	return &BulkHandlers{
+	h := &BulkHandlers{
 		repos:           repos,
 		validatorID:     config.ValidatorID,
 		logger:          logger,
@@ -79,6 +79,27 @@ func NewBulkHandlers(
 		exportJobs:      make(map[uuid.UUID]*ExportJob),
 		maxExportSize:   config.MaxExportSize,
 		startTime:       time.Now(),
+	}
+	// Reap expired export jobs so the in-memory map doesn't grow unbounded.
+	go h.reapExpiredExportJobs()
+	return h
+}
+
+// reapExpiredExportJobs periodically drops export jobs whose 24h ExpiresAt has
+// passed. Without it, every export accumulates in `exportJobs` (including its
+// gzipped FileData) for the lifetime of the process.
+func (h *BulkHandlers) reapExpiredExportJobs() {
+	ticker := time.NewTicker(1 * time.Hour)
+	defer ticker.Stop()
+	for range ticker.C {
+		now := time.Now()
+		h.exportMu.Lock()
+		for id, job := range h.exportJobs {
+			if now.After(job.ExpiresAt) {
+				delete(h.exportJobs, id)
+			}
+		}
+		h.exportMu.Unlock()
 	}
 }
 
@@ -690,7 +711,11 @@ func (h *BulkHandlers) buildFilter(req *BulkExportRequest) *database.ProofArtifa
 }
 
 func (h *BulkHandlers) processExportJob(job *ExportJob) {
-	ctx := context.Background()
+	// Runs in a detached goroutine after the HTTP request returns, so the
+	// request context is already cancelled — use a fresh context, but bound it
+	// with a timeout so a runaway export query can't hang the goroutine forever.
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
 
 	// Update status to processing
 	h.exportMu.Lock()
@@ -710,15 +735,33 @@ func (h *BulkHandlers) processExportJob(job *ExportJob) {
 		return
 	}
 
+	// When attestations are requested, fetch them for ALL proofs in one query
+	// (keyed by proof_id) instead of issuing one query per proof (N+1).
+	var attByProof map[uuid.UUID][]database.ProofAttestation
+	if job.Request.IncludeAttestations {
+		proofIDs := make([]uuid.UUID, 0, len(proofs))
+		for _, p := range proofs {
+			proofIDs = append(proofIDs, p.ProofID)
+		}
+		attByProof, err = h.repos.ProofArtifacts.GetProofAttestationsByProofs(ctx, proofIDs)
+		if err != nil {
+			h.exportMu.Lock()
+			job.Status = "failed"
+			job.Error = fmt.Sprintf("Failed to query attestations: %v", err)
+			h.exportMu.Unlock()
+			return
+		}
+	}
+
 	// Generate export file
 	var buf bytes.Buffer
 	gzWriter := gzip.NewWriter(&buf)
 
 	switch job.Format {
 	case "csv":
-		h.writeCSVExport(gzWriter, proofs, job)
+		h.writeCSVExport(gzWriter, proofs, job, attByProof)
 	default:
-		h.writeJSONLinesExport(gzWriter, proofs, job)
+		h.writeJSONLinesExport(gzWriter, proofs, job, attByProof)
 	}
 
 	gzWriter.Close()
@@ -736,8 +779,7 @@ func (h *BulkHandlers) processExportJob(job *ExportJob) {
 	h.logger.Printf("Export job %s completed: %d proofs, %d bytes", job.JobID, len(proofs), job.FileSizeBytes)
 }
 
-func (h *BulkHandlers) writeJSONLinesExport(w io.Writer, proofs []database.ProofArtifact, job *ExportJob) {
-	ctx := context.Background()
+func (h *BulkHandlers) writeJSONLinesExport(w io.Writer, proofs []database.ProofArtifact, job *ExportJob, attByProof map[uuid.UUID][]database.ProofAttestation) {
 	encoder := json.NewEncoder(w)
 
 	for _, proof := range proofs {
@@ -757,15 +799,14 @@ func (h *BulkHandlers) writeJSONLinesExport(w io.Writer, proofs []database.Proof
 		}
 
 		if job.Request.IncludeAttestations {
-			attestations, _ := h.repos.ProofArtifacts.GetProofAttestationsByProof(ctx, proof.ProofID)
-			record["attestations"] = attestations
+			record["attestations"] = attByProof[proof.ProofID]
 		}
 
 		encoder.Encode(record)
 	}
 }
 
-func (h *BulkHandlers) writeCSVExport(w io.Writer, proofs []database.ProofArtifact, job *ExportJob) {
+func (h *BulkHandlers) writeCSVExport(w io.Writer, proofs []database.ProofArtifact, job *ExportJob, attByProof map[uuid.UUID][]database.ProofAttestation) {
 	csvWriter := csv.NewWriter(w)
 	defer csvWriter.Flush()
 
@@ -779,8 +820,6 @@ func (h *BulkHandlers) writeCSVExport(w io.Writer, proofs []database.ProofArtifa
 		header = append(header, "attestation_count", "quorum_met")
 	}
 	csvWriter.Write(header)
-
-	ctx := context.Background()
 
 	for _, proof := range proofs {
 		record := []string{
@@ -799,7 +838,7 @@ func (h *BulkHandlers) writeCSVExport(w io.Writer, proofs []database.ProofArtifa
 		}
 
 		if job.Request.IncludeAttestations {
-			attestations, _ := h.repos.ProofArtifacts.GetProofAttestationsByProof(ctx, proof.ProofID)
+			attestations := attByProof[proof.ProofID]
 			validCount := 0
 			for _, att := range attestations {
 				if att.SignatureValid {
