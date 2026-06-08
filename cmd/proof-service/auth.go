@@ -9,14 +9,17 @@
 //	X-Certen-Service-Token: t=<unix>,m=<METHOD>,kv=<ver>,n=<nonce>,v1=<hex>
 //	HMAC input: "${t}.${METHOD}.${canonicalPath}.${bodyLen}.${bodyHash}.${nonce}"
 //
+// It also accepts the web app's Firebase ID token in `Authorization: Bearer`
+// (the web app calls the proof service directly) — see firebase_auth.go.
+//
 // Rollout is gated by AUTH_REQUIRED:
 //   - unset/false -> LOG-ONLY: verify + log, but never reject.
 //   - "true"      -> ENFORCE: reject unauthenticated/invalid requests with 401.
 //
-// NOTE: this only accepts the service token. The web app calls the proof
-// service directly with a Firebase ID token; until a Firebase verifier + the
-// web-side interceptor for the proofs origin are added, DO NOT set
-// AUTH_REQUIRED=true here or direct browser calls will be rejected.
+// Before flipping AUTH_REQUIRED=true: deploy this image (Go Firebase verifier),
+// set FIREBASE_PROJECT_ID, and ensure the web app's fetch interceptor attaches
+// the Firebase token to proof-service requests. Internal callers (gateway,
+// api-bridge proxy) already sign with the service token.
 
 package main
 
@@ -219,6 +222,18 @@ func authMiddleware(logger *log.Logger) func(http.Handler) http.Handler {
 					return
 				}
 				reason = "service-token:" + res.reason
+			} else if authHeader := r.Header.Get("Authorization"); strings.HasPrefix(authHeader, "Bearer ") {
+				// Web app: Firebase ID token.
+				token := strings.TrimSpace(strings.TrimPrefix(authHeader, "Bearer "))
+				uid, fbReason := verifyFirebaseIDToken(token)
+				if uid != "" {
+					if !authEnforce() {
+						logger.Printf("[auth:ok] firebase uid=%s %s %s", uid, r.Method, r.URL.Path)
+					}
+					next.ServeHTTP(w, r)
+					return
+				}
+				reason = "firebase:" + fbReason
 			}
 
 			if authEnforce() {

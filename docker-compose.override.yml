@@ -19,6 +19,11 @@ services:
       DATABASE_URL: ${PROOFS_DATABASE_URL}
       CORS_ORIGINS: "http://localhost:3000,http://localhost:3001,https://certen-web.web.app,https://certen-web.firebaseapp.com"
       PROOFS_SERVICE_TOKEN_SECRET_V1: ${PROOFS_SERVICE_TOKEN_SECRET_V1:-}
+      # Firebase project id — lets the Go verifier accept the web app's ID tokens.
+      FIREBASE_PROJECT_ID: ${FIREBASE_PROJECT_ID:-certen-web}
+      # Flip to "true" to ENFORCE auth (default log-only). Only after this image
+      # + the web app's proofs-origin interceptor are deployed.
+      AUTH_REQUIRED: ${PROOFS_AUTH_REQUIRED:-false}
     networks:
       - certen-validators_certen-net
 
