@@ -102,6 +102,12 @@ func (h *IntentLifecycleHandlers) HandleListByUser(w http.ResponseWriter, r *htt
 		return
 	}
 
+	// Per-tenant authorization: user callers are scoped to their own uid.
+	if !canAccessUser(r.Context(), userID) {
+		h.writeError(w, http.StatusForbidden, "FORBIDDEN", "Not authorized for this user")
+		return
+	}
+
 	limit := h.parseIntParam(r, "limit", 50)
 
 	ctx := r.Context()

@@ -89,6 +89,11 @@ func NewBulkHandlers(
 // passed. Without it, every export accumulates in `exportJobs` (including its
 // gzipped FileData) for the lifetime of the process.
 func (h *BulkHandlers) reapExpiredExportJobs() {
+	defer func() {
+		if r := recover(); r != nil {
+			h.logger.Printf("[panic] reapExpiredExportJobs: %v", r)
+		}
+	}()
 	ticker := time.NewTicker(1 * time.Hour)
 	defer ticker.Stop()
 	for range ticker.C {
@@ -711,6 +716,11 @@ func (h *BulkHandlers) buildFilter(req *BulkExportRequest) *database.ProofArtifa
 }
 
 func (h *BulkHandlers) processExportJob(job *ExportJob) {
+	defer func() {
+		if r := recover(); r != nil {
+			h.logger.Printf("[panic] processExportJob: %v", r)
+		}
+	}()
 	// Runs in a detached goroutine after the HTTP request returns, so the
 	// request context is already cancelled — use a fresh context, but bound it
 	// with a timeout so a runaway export query can't hang the goroutine forever.

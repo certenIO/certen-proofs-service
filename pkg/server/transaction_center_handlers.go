@@ -211,6 +211,13 @@ func (h *TransactionCenterHandlers) HandleGetUserIntents(w http.ResponseWriter, 
 		return
 	}
 
+	// Per-tenant authorization: a user caller may only read its own intents; the
+	// gateway (service principal) may read any user's.
+	if !canAccessUser(r.Context(), userID) {
+		h.writeError(w, http.StatusForbidden, "FORBIDDEN", "Not authorized for this user")
+		return
+	}
+
 	// Parse pagination params
 	limit := h.parseIntParam(r, "limit", 50)
 	offset := h.parseIntParam(r, "offset", 0)
@@ -255,6 +262,14 @@ func (h *TransactionCenterHandlers) HandleSearchAuditTrail(w http.ResponseWriter
 	// Parse optional filters
 	if v := r.URL.Query().Get("user_id"); v != "" {
 		filter.UserID = &v
+	}
+
+	// Per-tenant authorization: a user caller may only search its own audit
+	// trail — force the user_id filter to its uid regardless of query params.
+	// A service caller (gateway) may search across users.
+	if p, ok := PrincipalFrom(r.Context()); ok && p.Type == PrincipalUser {
+		uid := p.UID
+		filter.UserID = &uid
 	}
 	if v := r.URL.Query().Get("intent_id"); v != "" {
 		filter.IntentID = &v
