@@ -145,6 +145,12 @@ func main() {
 			bundleHandlers.HandleDownloadBundle(w, r)
 		case strings.HasSuffix(path, "/custody"):
 			bundleHandlers.HandleGetCustodyChain(w, r)
+		case strings.HasSuffix(path, "/layers"):
+			proofHandlers.HandleGetProofLayers(w, r)
+		case strings.HasSuffix(path, "/governance"):
+			proofHandlers.HandleGetProofGovernance(w, r)
+		case strings.HasSuffix(path, "/attestations"):
+			proofHandlers.HandleGetProofAttestations(w, r)
 		default:
 			proofHandlers.HandleGetProofByID(w, r)
 		}
