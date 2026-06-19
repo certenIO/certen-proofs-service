@@ -24,3 +24,9 @@ ALTER TABLE proof_requests ADD COLUMN IF NOT EXISTS completed_at     TIMESTAMPTZ
 
 CREATE INDEX IF NOT EXISTS idx_requests_status_reconciled ON proof_requests(status);
 CREATE INDEX IF NOT EXISTS idx_requests_created_reconciled ON proof_requests(created_at DESC);
+
+-- Record this migration as applied (runner keys on the filename-derived
+-- version, e.g. "011_proof_requests_reconcile"). Idempotent.
+INSERT INTO schema_migrations (version, description, applied_at)
+VALUES ('011_proof_requests_reconcile', 'reconcile proof_requests columns for code/migration drift', NOW())
+ON CONFLICT (version) DO NOTHING;

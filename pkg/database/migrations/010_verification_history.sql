@@ -32,3 +32,9 @@ CREATE TABLE IF NOT EXISTS verification_history (
 CREATE INDEX IF NOT EXISTS idx_verhist_proof ON verification_history(proof_id);
 CREATE INDEX IF NOT EXISTS idx_verhist_type ON verification_history(verification_type);
 CREATE INDEX IF NOT EXISTS idx_verhist_time ON verification_history(created_at DESC);
+
+-- Record this migration as applied (the runner keys on the filename-derived
+-- version, e.g. "010_verification_history"). Idempotent.
+INSERT INTO schema_migrations (version, description, applied_at)
+VALUES ('010_verification_history', 'verification_history table (code/migration drift fix)', NOW())
+ON CONFLICT (version) DO NOTHING;
