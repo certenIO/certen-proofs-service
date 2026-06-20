@@ -44,6 +44,15 @@ func main() {
 		if err := cfg.Validate(); err != nil {
 			log.Fatalf("Configuration validation failed: %v", err)
 		}
+		// Fail-closed startup guards (P2): never serve the proof corpus
+		// unauthenticated in production, and never start without the gateway
+		// shared secret (every gateway call would otherwise 401).
+		if !authEnforce() {
+			log.Fatalf("Refusing to start: auth is not enforced in production (set AUTH_REQUIRED=true, or DEVELOPMENT_MODE=true for local dev)")
+		}
+		if len(authServiceSecrets()) == 0 {
+			log.Fatalf("Refusing to start: PROOFS_SERVICE_TOKEN_SECRET_V1 is not set; all gateway requests would be rejected")
+		}
 	}
 
 	// Set up logging
@@ -145,24 +154,40 @@ func main() {
 			bundleHandlers.HandleDownloadBundle(w, r)
 		case strings.HasSuffix(path, "/custody"):
 			bundleHandlers.HandleGetCustodyChain(w, r)
+		case strings.HasSuffix(path, "/layers"):
+			proofHandlers.HandleGetProofLayers(w, r)
+		case strings.HasSuffix(path, "/governance"):
+			proofHandlers.HandleGetProofGovernance(w, r)
+		case strings.HasSuffix(path, "/attestations"):
+			proofHandlers.HandleGetProofAttestations(w, r)
 		default:
 			proofHandlers.HandleGetProofByID(w, r)
 		}
 	})
 
-	// Wrap with auth (dual-mode, log-only until AUTH_REQUIRED=true) + CORS.
-	// Auth is outermost so it can short-circuit before CORS, while still letting
-	// preflight + public paths through.
+	// Middleware chain (outermost first):
+	//   recover -> auth -> rate-limit -> CORS -> mux
+	// recover catches panics; auth short-circuits before CORS and sets the
+	// principal; rate-limit (after auth) exempts the trusted gateway.
 	logAuthStatus(logger)
-	handler := authMiddleware(logger)(corsMiddleware(cfg.CORSOrigins)(mux))
+	startAuthNonceReaper()
+	handler := recoverMiddleware(logger)(
+		authMiddleware(logger)(
+			rateLimitMiddleware(
+				corsMiddleware(cfg.CORSOrigins)(mux),
+			),
+		),
+	)
 
 	// Create HTTP server
 	srv := &http.Server{
-		Addr:         cfg.ListenAddr,
-		Handler:      handler,
-		ReadTimeout:  30 * time.Second,
-		WriteTimeout: 30 * time.Second,
-		IdleTimeout:  60 * time.Second,
+		Addr:              cfg.ListenAddr,
+		Handler:           handler,
+		ReadTimeout:       30 * time.Second,
+		ReadHeaderTimeout: 10 * time.Second, // mitigate Slowloris
+		WriteTimeout:      30 * time.Second,
+		IdleTimeout:       60 * time.Second,
+		MaxHeaderBytes:    1 << 20,
 	}
 
 	// Start server in goroutine

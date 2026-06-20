@@ -38,6 +38,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/certen/proofs-service/pkg/server"
 )
 
 const (
@@ -50,7 +52,36 @@ var (
 	authSeenNoncesMu sync.Mutex
 )
 
-func authEnforce() bool { return os.Getenv("AUTH_REQUIRED") == "true" }
+// authEnforce reports whether unauthenticated/invalid requests are rejected.
+// Fail-closed by default (P2): if AUTH_REQUIRED is set we honor it; if it is
+// unset we ENFORCE unless DEVELOPMENT_MODE=true. A forgotten env var must never
+// silently serve the proof corpus unauthenticated.
+func authEnforce() bool {
+	if v := os.Getenv("AUTH_REQUIRED"); v != "" {
+		return v == "true"
+	}
+	return os.Getenv("DEVELOPMENT_MODE") != "true"
+}
+
+// startAuthNonceReaper sweeps expired replay-protection nonces on a timer so
+// the per-request hot path is O(1) (was an O(n) scan of the whole map under a
+// global mutex on every authenticated request).
+func startAuthNonceReaper() {
+	go func() {
+		ticker := time.NewTicker(60 * time.Second)
+		defer ticker.Stop()
+		for range ticker.C {
+			now := time.Now().Unix()
+			authSeenNoncesMu.Lock()
+			for k, exp := range authSeenNonces {
+				if exp < now {
+					delete(authSeenNonces, k)
+				}
+			}
+			authSeenNoncesMu.Unlock()
+		}
+	}()
+}
 
 func authIsPublicPath(p string) bool {
 	return p == "/health" || p == "/api/v1/system/health"
@@ -153,12 +184,8 @@ func authVerifyServiceToken(header, method, path, rawQuery string, body []byte) 
 		return authResult{false, "stale", ""}
 	}
 
+	// O(1) replay check; expiry is swept by startAuthNonceReaper, not here.
 	authSeenNoncesMu.Lock()
-	for k, exp := range authSeenNonces {
-		if exp < now {
-			delete(authSeenNonces, k)
-		}
-	}
 	_, dup := authSeenNonces[nonce]
 	authSeenNoncesMu.Unlock()
 	if dup {
@@ -202,9 +229,12 @@ func authMiddleware(logger *log.Logger) func(http.Handler) http.Handler {
 			}
 
 			// Read + restore the body so the HMAC can be checked over the exact
-			// bytes the caller signed, and handlers can still read it.
+			// bytes the caller signed, and handlers can still read it. Bound the
+			// body (P4) so a giant POST can't be buffered into memory here.
+			const maxBodyBytes = 4 << 20 // 4 MiB
 			var body []byte
 			if r.Body != nil {
+				r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
 				if b, err := io.ReadAll(r.Body); err == nil {
 					body = b
 				}
@@ -218,7 +248,8 @@ func authMiddleware(logger *log.Logger) func(http.Handler) http.Handler {
 					if !authEnforce() {
 						logger.Printf("[auth:ok] service kv=%s %s %s", res.version, r.Method, r.URL.Path)
 					}
-					next.ServeHTTP(w, r)
+					ctx := server.WithPrincipal(r.Context(), server.Principal{Type: server.PrincipalService})
+					next.ServeHTTP(w, r.WithContext(ctx))
 					return
 				}
 				reason = "service-token:" + res.reason
@@ -230,7 +261,8 @@ func authMiddleware(logger *log.Logger) func(http.Handler) http.Handler {
 					if !authEnforce() {
 						logger.Printf("[auth:ok] firebase uid=%s %s %s", uid, r.Method, r.URL.Path)
 					}
-					next.ServeHTTP(w, r)
+					ctx := server.WithPrincipal(r.Context(), server.Principal{Type: server.PrincipalUser, UID: uid})
+					next.ServeHTTP(w, r.WithContext(ctx))
 					return
 				}
 				reason = "firebase:" + fbReason
