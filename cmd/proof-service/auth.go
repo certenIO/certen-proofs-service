@@ -243,7 +243,12 @@ func authMiddleware(logger *log.Logger) func(http.Handler) http.Handler {
 
 			reason := "no-credentials"
 			if header := r.Header.Get("X-Certen-Service-Token"); header != "" {
-				res := authVerifyServiceToken(header, r.Method, r.URL.Path, r.URL.RawQuery, body)
+				// Verify over the RAW wire path (EscapedPath), not the percent-decoded
+				// r.URL.Path. The gateway signs the encoded path (e.g. an acc:// tx hash
+				// as acc%3A%2F%2F…); decoding here made the HMAC input diverge only for
+				// paths with reserved chars, 401'ing every proof-by-tx-hash lookup while
+				// simple UUID paths (encode==decode) worked. RawQuery is already raw.
+				res := authVerifyServiceToken(header, r.Method, r.URL.EscapedPath(), r.URL.RawQuery, body)
 				if res.ok {
 					if !authEnforce() {
 						logger.Printf("[auth:ok] service kv=%s %s %s", res.version, r.Method, r.URL.Path)
