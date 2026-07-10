@@ -51,3 +51,6 @@ debt-todo/
 # PostgreSQL data (if running locally)
 postgres_data/
 config.bat
+
+# never commit real env files
+.env
