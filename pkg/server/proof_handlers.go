@@ -50,7 +50,11 @@ func (h *ProofHandlers) HandleGetProofByTxHash(w http.ResponseWriter, r *http.Re
 	}
 
 	// Extract tx hash from path: /api/v1/proofs/tx/{hash}
-	path := strings.TrimPrefix(r.URL.Path, "/api/v1/proofs/tx/")
+	//
+	// RawPath, not r.URL.Path: an Accumulate tx hash is acc://<hash>@<adi>/data,
+	// and the "//" would otherwise have been collapsed to "/" by path cleaning,
+	// producing a hash that matches no stored proof.
+	path := strings.TrimPrefix(RawPath(r), "/api/v1/proofs/tx/")
 	txHash := strings.TrimSuffix(path, "/")
 	if txHash == "" {
 		h.writeError(w, http.StatusBadRequest, "INVALID_TX_HASH", "Transaction hash is required")

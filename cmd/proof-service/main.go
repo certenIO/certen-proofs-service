@@ -166,15 +166,23 @@ func main() {
 	})
 
 	// Middleware chain (outermost first):
-	//   recover -> auth -> rate-limit -> CORS -> mux
+	//   recover -> auth -> rate-limit -> CORS -> preserve-raw-path -> mux
 	// recover catches panics; auth short-circuits before CORS and sets the
 	// principal; rate-limit (after auth) exempts the trusted gateway.
+	//
+	// preserve-raw-path sits INNERMOST, immediately outside the mux, so auth
+	// still verifies the HMAC over the untouched wire path while ServeMux never
+	// sees a path it wants to redirect. See pkg/server/rawpath.go: without it,
+	// an acc:// tx hash in the path triggers a 301 that replays the caller's
+	// one-time service token and 401s forever.
 	logAuthStatus(logger)
 	startAuthNonceReaper()
 	handler := recoverMiddleware(logger)(
 		authMiddleware(logger)(
 			rateLimitMiddleware(
-				corsMiddleware(cfg.CORSOrigins)(mux),
+				corsMiddleware(cfg.CORSOrigins)(
+					server.PreserveRawPathMiddleware(mux),
+				),
 			),
 		),
 	)
