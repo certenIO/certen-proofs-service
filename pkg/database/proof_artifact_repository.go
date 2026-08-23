@@ -95,6 +95,9 @@ func (r *ProofArtifactRepository) GetProofByID(ctx context.Context, proofID uuid
 
 	var proof ProofArtifact
 	var adiURL, fromChain, toChain, fromAddress, toAddress, amount, tokenSymbol sql.NullString
+	// Scanned into a nullable, NOT straight into the RawMessage: a SQL NULL must stay
+	// distinguishable from the JSON array `[]`. See the field's comment on ProofArtifact.
+	var declaredEffects []byte
 	err := r.db.QueryRowContext(ctx, query, proofID).Scan(
 		&proof.ProofID, &proof.ProofType, &proof.ProofVersion, &proof.AccumTxHash, &proof.AccountURL,
 		&proof.BatchID, &proof.BatchPosition, &proof.AnchorID, &proof.AnchorTxHash, &proof.AnchorBlockNumber, &proof.AnchorChain,
@@ -102,6 +105,7 @@ func (r *ProofArtifactRepository) GetProofByID(ctx context.Context, proofID uuid
 		&proof.Status, &proof.VerificationStatus, &proof.CreatedAt, &proof.AnchoredAt, &proof.VerifiedAt,
 		&proof.ArtifactJSON, &proof.ArtifactHash,
 		&adiURL, &fromChain, &toChain, &fromAddress, &toAddress, &amount, &tokenSymbol,
+		&declaredEffects,
 	)
 
 	if err == sql.ErrNoRows {
@@ -119,6 +123,11 @@ func (r *ProofArtifactRepository) GetProofByID(ctx context.Context, proofID uuid
 	proof.ToAddress = toAddress.String
 	proof.Amount = amount.String
 	proof.TokenSymbol = tokenSymbol.String
+	// Left nil when the column is NULL, so `omitempty` drops the key and the consumer reads
+	// "unknown" rather than "nothing was declared".
+	if len(declaredEffects) > 0 {
+		proof.DeclaredEffects = json.RawMessage(declaredEffects)
+	}
 
 	return &proof, nil
 }
@@ -131,7 +140,8 @@ func (r *ProofArtifactRepository) GetProofByTxHash(ctx context.Context, txHash s
 			   pa.merkle_root, pa.leaf_hash, pa.leaf_index, pa.gov_level, pa.proof_class, pa.validator_id,
 			   pa.status, pa.verification_status, pa.created_at, pa.anchored_at, pa.verified_at,
 			   COALESCE(pa.artifact_json, '{}'::jsonb) as artifact_json, pa.artifact_hash,
-			   bt.adi_url, bt.from_chain, bt.to_chain, bt.from_address, bt.to_address, bt.amount, bt.token_symbol
+			   bt.adi_url, bt.from_chain, bt.to_chain, bt.from_address, bt.to_address, bt.amount, bt.token_symbol,
+			   bt.declared_effects
 		FROM proof_artifacts pa
 		LEFT JOIN batch_transactions bt ON bt.intent_id = pa.intent_id
 		WHERE pa.accum_tx_hash = $1`

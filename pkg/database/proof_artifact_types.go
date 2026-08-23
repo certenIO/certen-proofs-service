@@ -120,21 +120,40 @@ type ProofArtifact struct {
 	ToAddress   string `json:"to_address,omitempty"`
 	Amount      string `json:"amount,omitempty"`
 	TokenSymbol string `json:"token_symbol,omitempty"`
+
+	// DeclaredEffects is what this transaction committed IN ADVANCE to doing (RB-4), joined from
+	// batch_transactions. A JSON array of {contract, topic0, dataHash?}.
+	//
+	// ── THE THREE STATES ARE THE WHOLE VALUE OF THIS FIELD ────────────────────────────────────────
+	//
+	//   key absent      the commitment is unknown — no envelope, or it predates the column
+	//   key present []  the envelope parsed and NOTHING was declared. A native transfer.
+	//   key present [.] these events were committed to
+	//
+	// The middle and the first are NOT the same, and a consumer is entitled to rely on the
+	// difference: an attestation on a leg that declared events means the events were OBSERVED,
+	// because the validator refuses to attest otherwise. So "declared nothing" lets a report say the
+	// question does not arise, while "unknown" only lets it say it cannot answer.
+	//
+	// `omitempty` on a nil json.RawMessage omits the key, which is exactly the first state. It must
+	// NOT be given a default of `[]` — that would turn "we never found out" into a positive claim
+	// that the transaction committed to nothing. See the validator's migration 012.
+	DeclaredEffects json.RawMessage `json:"declared_effects,omitempty" db:"declared_effects"`
 }
 
 // NewProofArtifact is used to create a new proof artifact
 type NewProofArtifact struct {
-	ProofType    ProofType       `json:"proof_type"`
-	AccumTxHash  string          `json:"accum_tx_hash"`
-	AccountURL   string          `json:"account_url"`
-	BatchID      *uuid.UUID      `json:"batch_id,omitempty"`
-	MerkleRoot   []byte          `json:"merkle_root,omitempty"`
-	LeafHash     []byte          `json:"leaf_hash,omitempty"`
-	LeafIndex    *int            `json:"leaf_index,omitempty"`
+	ProofType    ProofType        `json:"proof_type"`
+	AccumTxHash  string           `json:"accum_tx_hash"`
+	AccountURL   string           `json:"account_url"`
+	BatchID      *uuid.UUID       `json:"batch_id,omitempty"`
+	MerkleRoot   []byte           `json:"merkle_root,omitempty"`
+	LeafHash     []byte           `json:"leaf_hash,omitempty"`
+	LeafIndex    *int             `json:"leaf_index,omitempty"`
 	GovLevel     *GovernanceLevel `json:"gov_level,omitempty"`
-	ProofClass   ProofClass      `json:"proof_class"`
-	ValidatorID  string          `json:"validator_id"`
-	ArtifactJSON json.RawMessage `json:"artifact_json"`
+	ProofClass   ProofClass       `json:"proof_class"`
+	ValidatorID  string           `json:"validator_id"`
+	ArtifactJSON json.RawMessage  `json:"artifact_json"`
 }
 
 // ============================================================================
@@ -154,9 +173,9 @@ type ChainedProofLayer struct {
 	ReceiptAnchor []byte  `json:"receipt_anchor,omitempty" db:"receipt_anchor"`
 
 	// Layer 2 Fields
-	BVNRoot        []byte `json:"bvn_root,omitempty" db:"bvn_root"`
-	DNRoot         []byte `json:"dn_root,omitempty" db:"dn_root"`
-	AnchorSequence *int64 `json:"anchor_sequence,omitempty" db:"anchor_sequence"`
+	BVNRoot        []byte  `json:"bvn_root,omitempty" db:"bvn_root"`
+	DNRoot         []byte  `json:"dn_root,omitempty" db:"dn_root"`
+	AnchorSequence *int64  `json:"anchor_sequence,omitempty" db:"anchor_sequence"`
 	BVNPartitionID *string `json:"bvn_partition_id,omitempty" db:"bvn_partition_id"`
 
 	// Layer 3 Fields
@@ -484,10 +503,10 @@ type ProofArtifactFilter struct {
 	Offset int `json:"offset,omitempty"`
 
 	// Bulk filter arrays (for bulk export operations)
-	AccountURLs       []string `json:"account_urls,omitempty"`
-	Statuses          []string `json:"statuses,omitempty"`
-	GovernanceLevels  []string `json:"governance_levels,omitempty"`
-	GovernanceLevel   *string  `json:"governance_level,omitempty"`
+	AccountURLs      []string `json:"account_urls,omitempty"`
+	Statuses         []string `json:"statuses,omitempty"`
+	GovernanceLevels []string `json:"governance_levels,omitempty"`
+	GovernanceLevel  *string  `json:"governance_level,omitempty"`
 }
 
 // ============================================================================
@@ -508,16 +527,16 @@ type ProofArtifactWithDetails struct {
 // TransactionMetadata contains transaction details from batch_transactions
 // Available for on-demand transactions; may be nil for on-cadence proofs
 type TransactionMetadata struct {
-	IntentID     string `json:"intent_id,omitempty"`
-	AdiURL       string `json:"adi_url,omitempty"`
-	FromChain    string `json:"from_chain,omitempty"`
-	ToChain      string `json:"to_chain,omitempty"`
-	FromAddress  string `json:"from_address,omitempty"`
-	ToAddress    string `json:"to_address,omitempty"`
-	Amount       string `json:"amount,omitempty"`
-	TokenSymbol  string `json:"token_symbol,omitempty"`
-	IntentType   string `json:"intent_type,omitempty"`
-	UserID       string `json:"user_id,omitempty"`
+	IntentID    string `json:"intent_id,omitempty"`
+	AdiURL      string `json:"adi_url,omitempty"`
+	FromChain   string `json:"from_chain,omitempty"`
+	ToChain     string `json:"to_chain,omitempty"`
+	FromAddress string `json:"from_address,omitempty"`
+	ToAddress   string `json:"to_address,omitempty"`
+	Amount      string `json:"amount,omitempty"`
+	TokenSymbol string `json:"token_symbol,omitempty"`
+	IntentType  string `json:"intent_type,omitempty"`
+	UserID      string `json:"user_id,omitempty"`
 }
 
 // ProofSummary is a lightweight proof listing with transaction metadata
@@ -556,17 +575,17 @@ type BatchProofStats struct {
 
 // ProofBundle represents a self-contained verification bundle
 type ProofBundle struct {
-	BundleID      uuid.UUID `json:"bundle_id" db:"bundle_id"`
-	ProofID       uuid.UUID `json:"proof_id" db:"proof_id"`
+	BundleID uuid.UUID `json:"bundle_id" db:"bundle_id"`
+	ProofID  uuid.UUID `json:"proof_id" db:"proof_id"`
 
 	// Bundle metadata
 	BundleFormat  string `json:"bundle_format" db:"bundle_format"`   // "certen_v1"
 	BundleVersion string `json:"bundle_version" db:"bundle_version"` // "1.0"
 
 	// Bundle data (gzipped JSON)
-	BundleData    []byte `json:"bundle_data" db:"bundle_data"`
-	BundleHash    []byte `json:"bundle_hash" db:"bundle_hash"` // SHA256 of uncompressed
-	BundleSizeBytes int  `json:"bundle_size_bytes" db:"bundle_size_bytes"`
+	BundleData      []byte `json:"bundle_data" db:"bundle_data"`
+	BundleHash      []byte `json:"bundle_hash" db:"bundle_hash"` // SHA256 of uncompressed
+	BundleSizeBytes int    `json:"bundle_size_bytes" db:"bundle_size_bytes"`
 
 	// Component flags
 	IncludesChained    bool `json:"includes_chained" db:"includes_chained"`
@@ -585,85 +604,85 @@ type ProofBundle struct {
 
 // NewProofBundle is used to create a new bundle record
 type NewProofBundle struct {
-	ProofID            uuid.UUID `json:"proof_id"`
-	BundleFormat       string    `json:"bundle_format"`
-	BundleVersion      string    `json:"bundle_version"`
-	BundleData         []byte    `json:"bundle_data"`
-	BundleHash         []byte    `json:"bundle_hash"`
-	BundleSizeBytes    int       `json:"bundle_size_bytes"`
-	IncludesChained    bool      `json:"includes_chained"`
-	IncludesGovernance bool      `json:"includes_governance"`
-	IncludesMerkle     bool      `json:"includes_merkle"`
-	IncludesAnchor     bool      `json:"includes_anchor"`
-	AttestationCount   int       `json:"attestation_count"`
+	ProofID            uuid.UUID  `json:"proof_id"`
+	BundleFormat       string     `json:"bundle_format"`
+	BundleVersion      string     `json:"bundle_version"`
+	BundleData         []byte     `json:"bundle_data"`
+	BundleHash         []byte     `json:"bundle_hash"`
+	BundleSizeBytes    int        `json:"bundle_size_bytes"`
+	IncludesChained    bool       `json:"includes_chained"`
+	IncludesGovernance bool       `json:"includes_governance"`
+	IncludesMerkle     bool       `json:"includes_merkle"`
+	IncludesAnchor     bool       `json:"includes_anchor"`
+	AttestationCount   int        `json:"attestation_count"`
 	ExpiresAt          *time.Time `json:"expires_at,omitempty"`
 }
 
 // CustodyChainEvent represents an audit trail event
 type CustodyChainEvent struct {
-	EventID       uuid.UUID `json:"event_id" db:"event_id"`
-	ProofID       uuid.UUID `json:"proof_id" db:"proof_id"`
+	EventID uuid.UUID `json:"event_id" db:"event_id"`
+	ProofID uuid.UUID `json:"proof_id" db:"proof_id"`
 
 	// Event classification
-	EventType     string    `json:"event_type" db:"event_type"` // "created", "anchored", "attested", "verified", "retrieved"
+	EventType      string    `json:"event_type" db:"event_type"` // "created", "anchored", "attested", "verified", "retrieved"
 	EventTimestamp time.Time `json:"event_timestamp" db:"event_timestamp"`
 
 	// Actor information
-	ActorType     string  `json:"actor_type" db:"actor_type"` // "validator", "api", "system", "external"
-	ActorID       *string `json:"actor_id,omitempty" db:"actor_id"`
+	ActorType string  `json:"actor_type" db:"actor_type"` // "validator", "api", "system", "external"
+	ActorID   *string `json:"actor_id,omitempty" db:"actor_id"`
 
 	// Chain hashes
-	PreviousHash  []byte `json:"previous_hash,omitempty" db:"previous_hash"`
-	CurrentHash   []byte `json:"current_hash" db:"current_hash"`
+	PreviousHash []byte `json:"previous_hash,omitempty" db:"previous_hash"`
+	CurrentHash  []byte `json:"current_hash" db:"current_hash"`
 
 	// Event details
-	EventDetails  json.RawMessage `json:"event_details,omitempty" db:"event_details"`
+	EventDetails json.RawMessage `json:"event_details,omitempty" db:"event_details"`
 
 	// Signature (optional, for validator events)
-	Signature     []byte `json:"signature,omitempty" db:"signature"`
+	Signature []byte `json:"signature,omitempty" db:"signature"`
 
-	CreatedAt     time.Time `json:"created_at" db:"created_at"`
+	CreatedAt time.Time `json:"created_at" db:"created_at"`
 }
 
 // NewCustodyChainEvent is used to create a custody chain event
 type NewCustodyChainEvent struct {
-	ProofID       uuid.UUID       `json:"proof_id"`
-	EventType     string          `json:"event_type"`
-	ActorType     string          `json:"actor_type"`
-	ActorID       *string         `json:"actor_id,omitempty"`
-	PreviousHash  []byte          `json:"previous_hash,omitempty"`
-	CurrentHash   []byte          `json:"current_hash"`
-	EventDetails  json.RawMessage `json:"event_details,omitempty"`
-	Signature     []byte          `json:"signature,omitempty"`
+	ProofID      uuid.UUID       `json:"proof_id"`
+	EventType    string          `json:"event_type"`
+	ActorType    string          `json:"actor_type"`
+	ActorID      *string         `json:"actor_id,omitempty"`
+	PreviousHash []byte          `json:"previous_hash,omitempty"`
+	CurrentHash  []byte          `json:"current_hash"`
+	EventDetails json.RawMessage `json:"event_details,omitempty"`
+	Signature    []byte          `json:"signature,omitempty"`
 }
 
 // APIKey represents an external API key for proof access
 type APIKey struct {
-	KeyID           uuid.UUID  `json:"key_id" db:"key_id"`
-	KeyHash         []byte     `json:"key_hash" db:"key_hash"` // SHA256 of key
+	KeyID   uuid.UUID `json:"key_id" db:"key_id"`
+	KeyHash []byte    `json:"key_hash" db:"key_hash"` // SHA256 of key
 
 	// Client information
-	ClientName      string `json:"client_name" db:"client_name"`
-	ClientType      string `json:"client_type" db:"client_type"` // "auditor", "service", "institution"
+	ClientName string `json:"client_name" db:"client_name"`
+	ClientType string `json:"client_type" db:"client_type"` // "auditor", "service", "institution"
 
 	// Permissions
-	CanReadProofs   bool `json:"can_read_proofs" db:"can_read_proofs"`
+	CanReadProofs    bool `json:"can_read_proofs" db:"can_read_proofs"`
 	CanRequestProofs bool `json:"can_request_proofs" db:"can_request_proofs"`
-	CanBulkDownload bool `json:"can_bulk_download" db:"can_bulk_download"`
+	CanBulkDownload  bool `json:"can_bulk_download" db:"can_bulk_download"`
 
 	// Rate limiting
 	RateLimitPerMin int `json:"rate_limit_per_min" db:"rate_limit_per_min"`
 
 	// Status
-	IsActive        bool       `json:"is_active" db:"is_active"`
-	ExpiresAt       *time.Time `json:"expires_at,omitempty" db:"expires_at"`
+	IsActive  bool       `json:"is_active" db:"is_active"`
+	ExpiresAt *time.Time `json:"expires_at,omitempty" db:"expires_at"`
 
 	// Metadata
 	Description  *string `json:"description,omitempty" db:"description"`
 	ContactEmail *string `json:"contact_email,omitempty" db:"contact_email"`
 
-	CreatedAt       time.Time  `json:"created_at" db:"created_at"`
-	LastUsedAt      *time.Time `json:"last_used_at,omitempty" db:"last_used_at"`
+	CreatedAt  time.Time  `json:"created_at" db:"created_at"`
+	LastUsedAt *time.Time `json:"last_used_at,omitempty" db:"last_used_at"`
 }
 
 // NewAPIKey is used to create a new API key
@@ -734,9 +753,9 @@ type ProofPricingTier struct {
 
 // BundleDownloadRecord tracks bundle downloads for auditing
 type BundleDownloadRecord struct {
-	DownloadID  uuid.UUID  `json:"download_id" db:"download_id"`
-	BundleID    uuid.UUID  `json:"bundle_id" db:"bundle_id"`
-	APIKeyID    *uuid.UUID `json:"api_key_id,omitempty" db:"api_key_id"`
+	DownloadID uuid.UUID  `json:"download_id" db:"download_id"`
+	BundleID   uuid.UUID  `json:"bundle_id" db:"bundle_id"`
+	APIKeyID   *uuid.UUID `json:"api_key_id,omitempty" db:"api_key_id"`
 
 	// Request info
 	ClientIP  string `json:"client_ip" db:"client_ip"`
@@ -865,11 +884,11 @@ type AggregatedAttestationRecord struct {
 	MessageHash []byte `json:"message_hash" db:"message_hash"`
 
 	// Aggregated BLS Signature
-	AggregatedSignature []byte `json:"aggregated_signature" db:"aggregated_signature"` // BLS12-381 G1
+	AggregatedSignature []byte `json:"aggregated_signature" db:"aggregated_signature"`   // BLS12-381 G1
 	AggregatedPublicKey []byte `json:"aggregated_public_key" db:"aggregated_public_key"` // BLS12-381 G2
 
 	// Participant Information
-	ParticipantIDs   json.RawMessage `json:"participant_ids" db:"participant_ids"`     // JSON array of validator IDs
+	ParticipantIDs   json.RawMessage `json:"participant_ids" db:"participant_ids"` // JSON array of validator IDs
 	ParticipantCount int             `json:"participant_count" db:"participant_count"`
 
 	// Weight Calculations
@@ -952,9 +971,9 @@ type NewValidatorSetSnapshot struct {
 // ValidatorEntry represents a single validator in a snapshot
 type ValidatorEntry struct {
 	ValidatorID string `json:"validator_id"`
-	PublicKey   []byte `json:"public_key"`   // BLS12-381 G2 point
+	PublicKey   []byte `json:"public_key"` // BLS12-381 G2 point
 	Weight      int64  `json:"weight"`
-	Index       int    `json:"index"`        // Position in validator set
+	Index       int    `json:"index"` // Position in validator set
 }
 
 // ProofCycleCompletionRecord tracks complete proof cycles through all 4 levels
@@ -1035,9 +1054,9 @@ type ProofCycleCompletionUpdate struct {
 // IntentSummary is a lightweight intent listing for user's transaction list
 type IntentSummary struct {
 	// Intent Identity
-	IntentID    string  `json:"intent_id" db:"intent_id"`
-	UserID      string  `json:"user_id" db:"user_id"`
-	AccumTxHash string  `json:"accumulate_tx_hash" db:"accumulate_tx_hash"`
+	IntentID    string `json:"intent_id" db:"intent_id"`
+	UserID      string `json:"user_id" db:"user_id"`
+	AccumTxHash string `json:"accumulate_tx_hash" db:"accumulate_tx_hash"`
 
 	// Transaction Details
 	FromChain   *string `json:"from_chain,omitempty" db:"from_chain"`
@@ -1053,20 +1072,20 @@ type IntentSummary struct {
 	AllChains []string `json:"all_chains,omitempty"`
 
 	// Status
-	Status           string  `json:"status" db:"status"`
-	GovernanceLevel  *string `json:"governance_level,omitempty" db:"governance_level"`
-	GovernanceValid  bool    `json:"governance_valid" db:"governance_valid"`
-	ChainedProofValid bool   `json:"chained_proof_valid" db:"chained_proof_valid"`
-	CurrentStage     int     `json:"current_stage" db:"current_stage"`
+	Status            string  `json:"status" db:"status"`
+	GovernanceLevel   *string `json:"governance_level,omitempty" db:"governance_level"`
+	GovernanceValid   bool    `json:"governance_valid" db:"governance_valid"`
+	ChainedProofValid bool    `json:"chained_proof_valid" db:"chained_proof_valid"`
+	CurrentStage      int     `json:"current_stage" db:"current_stage"`
 
 	// Anchor Information
-	AnchorTxHash      *string `json:"anchor_tx_hash,omitempty" db:"anchor_tx_hash"`
-	AnchorConfirmations int   `json:"anchor_confirmations" db:"anchor_confirmations"`
-	AnchorIsFinal     bool    `json:"anchor_is_final" db:"anchor_is_final"`
+	AnchorTxHash        *string `json:"anchor_tx_hash,omitempty" db:"anchor_tx_hash"`
+	AnchorConfirmations int     `json:"anchor_confirmations" db:"anchor_confirmations"`
+	AnchorIsFinal       bool    `json:"anchor_is_final" db:"anchor_is_final"`
 
 	// Proof Reference
-	ProofID   *uuid.UUID `json:"proof_id,omitempty" db:"proof_id"`
-	BatchID   *uuid.UUID `json:"batch_id,omitempty" db:"batch_id"`
+	ProofID *uuid.UUID `json:"proof_id,omitempty" db:"proof_id"`
+	BatchID *uuid.UUID `json:"batch_id,omitempty" db:"batch_id"`
 
 	// Lifecycle (from intent_lifecycle table if available)
 	LifecycleStatus *string    `json:"lifecycle_status,omitempty"`
@@ -1089,87 +1108,87 @@ type IntentProofDetails struct {
 	AnchorReference  *AnchorReferenceRecord `json:"anchor_reference,omitempty"`
 
 	// Batch Information
-	BatchStatus      *string    `json:"batch_status,omitempty"`
-	BatchMerkleRoot  []byte     `json:"batch_merkle_root,omitempty"`
-	BatchTxCount     int        `json:"batch_tx_count" db:"batch_tx_count"`
-	BatchQuorumMet   bool       `json:"batch_quorum_met" db:"batch_quorum_met"`
+	BatchStatus     *string `json:"batch_status,omitempty"`
+	BatchMerkleRoot []byte  `json:"batch_merkle_root,omitempty"`
+	BatchTxCount    int     `json:"batch_tx_count" db:"batch_tx_count"`
+	BatchQuorumMet  bool    `json:"batch_quorum_met" db:"batch_quorum_met"`
 
 	// Attestations Summary
 	AttestationCount int `json:"attestation_count"`
 
 	// Multi-Leg Proof Details (populated when intent has leg_count > 1)
-	LegCount int              `json:"leg_count,omitempty"`
+	LegCount  int              `json:"leg_count,omitempty"`
 	LegProofs []LegProofDetail `json:"leg_proofs,omitempty"`
 }
 
 // LegProofDetail contains proof information for a single leg of a multi-leg intent
 type LegProofDetail struct {
-	LegID       uuid.UUID      `json:"leg_id"`
-	LegIndex    int            `json:"leg_index"`
-	TargetChain string         `json:"target_chain"`
-	Role        string         `json:"role"`
-	Status      string         `json:"status"`
-	ProofID     *uuid.UUID     `json:"proof_id,omitempty"`
-	Proof       *ProofArtifact `json:"proof,omitempty"`
-	AnchorTxHash    *string    `json:"anchor_tx_hash,omitempty"`
-	ExecutionTxHash *string    `json:"execution_tx_hash,omitempty"`
-	FromAddress *string        `json:"from_address,omitempty"`
-	ToAddress   *string        `json:"to_address,omitempty"`
-	Amount      *string        `json:"amount,omitempty"`
-	TokenSymbol *string        `json:"token_symbol,omitempty"`
-	CreatedAt   time.Time      `json:"created_at"`
-	CompletedAt *time.Time     `json:"completed_at,omitempty"`
+	LegID           uuid.UUID      `json:"leg_id"`
+	LegIndex        int            `json:"leg_index"`
+	TargetChain     string         `json:"target_chain"`
+	Role            string         `json:"role"`
+	Status          string         `json:"status"`
+	ProofID         *uuid.UUID     `json:"proof_id,omitempty"`
+	Proof           *ProofArtifact `json:"proof,omitempty"`
+	AnchorTxHash    *string        `json:"anchor_tx_hash,omitempty"`
+	ExecutionTxHash *string        `json:"execution_tx_hash,omitempty"`
+	FromAddress     *string        `json:"from_address,omitempty"`
+	ToAddress       *string        `json:"to_address,omitempty"`
+	Amount          *string        `json:"amount,omitempty"`
+	TokenSymbol     *string        `json:"token_symbol,omitempty"`
+	CreatedAt       time.Time      `json:"created_at"`
+	CompletedAt     *time.Time     `json:"completed_at,omitempty"`
 }
 
 // IntentTimelineEvent represents a single event in the intent's timeline
 type IntentTimelineEvent struct {
-	EventID       uuid.UUID       `json:"event_id" db:"event_id"`
-	ProofID       *uuid.UUID      `json:"proof_id,omitempty" db:"proof_id"`
-	IntentID      string          `json:"intent_id" db:"intent_id"`
-	AccumTxHash   string          `json:"accumulate_tx_hash" db:"accumulate_tx_hash"`
+	EventID     uuid.UUID  `json:"event_id" db:"event_id"`
+	ProofID     *uuid.UUID `json:"proof_id,omitempty" db:"proof_id"`
+	IntentID    string     `json:"intent_id" db:"intent_id"`
+	AccumTxHash string     `json:"accumulate_tx_hash" db:"accumulate_tx_hash"`
 
 	// Event Details
-	EventType     string          `json:"event_type" db:"event_type"`
-	Phase         string          `json:"phase" db:"phase"`
-	Action        string          `json:"action" db:"action"`
-	Message       string          `json:"message" db:"message"`
+	EventType string `json:"event_type" db:"event_type"`
+	Phase     string `json:"phase" db:"phase"`
+	Action    string `json:"action" db:"action"`
+	Message   string `json:"message" db:"message"`
 
 	// Actor Information
-	ActorType     string          `json:"actor_type" db:"actor_type"`
-	ActorID       *string         `json:"actor_id,omitempty" db:"actor_id"`
+	ActorType string  `json:"actor_type" db:"actor_type"`
+	ActorID   *string `json:"actor_id,omitempty" db:"actor_id"`
 
 	// Hash Chain
-	PreviousHash  []byte          `json:"previous_hash,omitempty" db:"previous_hash"`
-	CurrentHash   []byte          `json:"current_hash" db:"current_hash"`
+	PreviousHash []byte `json:"previous_hash,omitempty" db:"previous_hash"`
+	CurrentHash  []byte `json:"current_hash" db:"current_hash"`
 
 	// Additional Details
-	Details       json.RawMessage `json:"details,omitempty" db:"details"`
+	Details json.RawMessage `json:"details,omitempty" db:"details"`
 
 	// Timestamp
-	Timestamp     time.Time       `json:"timestamp" db:"event_timestamp"`
+	Timestamp time.Time `json:"timestamp" db:"event_timestamp"`
 }
 
 // IntentAttestationSummary represents attestation info for an intent
 type IntentAttestationSummary struct {
-	IntentID        string    `json:"intent_id"`
-	AccumTxHash     string    `json:"accumulate_tx_hash"`
-	ProofID         *uuid.UUID `json:"proof_id,omitempty"`
+	IntentID    string     `json:"intent_id"`
+	AccumTxHash string     `json:"accumulate_tx_hash"`
+	ProofID     *uuid.UUID `json:"proof_id,omitempty"`
 
 	// Ed25519 Attestations
 	Ed25519Attestations []ProofAttestation `json:"ed25519_attestations,omitempty"`
 	Ed25519Count        int                `json:"ed25519_count"`
 
 	// BLS Attestations (if available)
-	BLSAttestations     []BLSAttestationRecord `json:"bls_attestations,omitempty"`
-	BLSCount            int                    `json:"bls_count"`
+	BLSAttestations []BLSAttestationRecord `json:"bls_attestations,omitempty"`
+	BLSCount        int                    `json:"bls_count"`
 
 	// Aggregated BLS (if available)
-	AggregatedBLS       *AggregatedAttestationRecord `json:"aggregated_bls,omitempty"`
+	AggregatedBLS *AggregatedAttestationRecord `json:"aggregated_bls,omitempty"`
 
 	// Quorum Status
-	QuorumRequired      int  `json:"quorum_required"`
-	QuorumAchieved      int  `json:"quorum_achieved"`
-	QuorumMet           bool `json:"quorum_met"`
+	QuorumRequired int  `json:"quorum_required"`
+	QuorumAchieved int  `json:"quorum_achieved"`
+	QuorumMet      bool `json:"quorum_met"`
 }
 
 // IntentFilter defines filters for intent queries (audit mode)
