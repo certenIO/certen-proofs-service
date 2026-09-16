@@ -72,6 +72,13 @@ func main() {
 	} else {
 		logger.Printf("Database connected successfully")
 		defer dbClient.Close()
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		err := dbClient.VerifySharedSchema(ctx)
+		cancel()
+		if err != nil {
+			logger.Fatalf("Shared database schema verification failed: %v", err)
+		}
+		logger.Printf("Shared database schema verified")
 	}
 
 	// Create repositories

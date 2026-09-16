@@ -26,10 +26,10 @@ var migrationsFS embed.FS
 
 // Client represents a database client with connection pooling and automatic reconnection
 type Client struct {
-	db       *sql.DB
-	config   *config.Config
-	logger   *log.Logger
-	stopCh   chan struct{}
+	db     *sql.DB
+	config *config.Config
+	logger *log.Logger
+	stopCh chan struct{}
 }
 
 // ClientOption is a functional option for configuring the client
@@ -144,6 +144,19 @@ func (c *Client) connectionHealthMonitor() {
 // DB returns the underlying *sql.DB for direct access
 func (c *Client) DB() *sql.DB {
 	return c.db
+}
+
+// VerifySharedSchema confirms that the deploy-owned schema catalog has been applied. Proofs service never
+// performs DDL against certen_proofs; a missing or stale catalog is a startup failure.
+func (c *Client) VerifySharedSchema(ctx context.Context) error {
+	var count int
+	if err := c.db.QueryRowContext(ctx, `SELECT count(*) FROM certen_schema_history`).Scan(&count); err != nil {
+		return fmt.Errorf("shared schema history unavailable: %w", err)
+	}
+	if count == 0 {
+		return fmt.Errorf("shared schema history is empty")
+	}
+	return nil
 }
 
 // Close closes the database connection and stops the health monitor
@@ -360,8 +373,8 @@ func (c *Client) MigrationStatus(ctx context.Context) ([]MigrationInfo, error) {
 	var status []MigrationInfo
 	for _, m := range migrations {
 		status = append(status, MigrationInfo{
-			Version:  m.Version,
-			Applied:  applied[m.Version],
+			Version: m.Version,
+			Applied: applied[m.Version],
 		})
 	}
 

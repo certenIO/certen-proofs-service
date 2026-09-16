@@ -30,8 +30,6 @@ RUN apk add --no-cache ca-certificates tzdata
 # Copy binary from builder
 COPY --from=builder /app/proof-service .
 
-# Copy migrations for database setup
-COPY --from=builder /app/pkg/database/migrations ./migrations
 
 # Create non-root user
 RUN adduser -D -g '' appuser
