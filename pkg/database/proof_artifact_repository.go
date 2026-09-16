@@ -2818,7 +2818,18 @@ func (r *ProofArtifactRepository) GetProofByIntentID(ctx context.Context, intent
 			   COALESCE(bt.created_at, NOW()), bt.created_at_client,
 			   ab.status AS batch_status, ab.merkle_root AS batch_merkle_root,
 			   ab.transaction_count AS batch_tx_count,
-			   COALESCE(ab.quorum_reached, FALSE) AS batch_quorum_met,
+			   -- Quorum is reported ONLY from a canonical anchor row.
+			   --
+			   -- anchor_batches holds two kinds of row. A canonical one is written by the validator that
+			   -- proved the anchor, keyed (chain_id, bundle_id), and carries the signer set the chain
+			   -- verified. A legacy SHADOW row is a per-validator artefact of the retired batch pipeline:
+			   -- it has no bundle_id, its merkle_root is a local hash of pending blobs that was never
+			   -- published anywhere, and its quorum_reached was set by a coordinator that never reached
+			   -- the chain. Reporting the shadow row's flag told the Transaction Center that a quorum had
+			   -- attested a root no anchor ever held.
+			   --
+			   -- bundle_id IS NOT NULL is the canonical test (see validator migration 018).
+			   COALESCE(ab.quorum_reached AND ab.bundle_id IS NOT NULL, FALSE) AS batch_quorum_met,
 			   COALESCE(pa.status, ab.status, 'pending') AS proof_status,
 			   pa.proof_id,
 			   ar.anchor_tx_hash, COALESCE(ar.confirmations, 0), COALESCE(ar.is_final, FALSE)
