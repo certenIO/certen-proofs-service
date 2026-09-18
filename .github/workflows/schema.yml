@@ -1,0 +1,53 @@
+name: Shared schema and database tests
+
+# This service owns no schema. Its tests run against a database built by the one migration stream,
+# certen-validator's db/migrations, applied with the validator's own runner — so a statement here that
+# references a table or column the shared schema lacks fails CI, not a production request.
+#
+# The validator is checked out at main on purpose: a new shared migration that breaks this service's SQL
+# should turn this repository red before it is deployed.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_DB: certen_test
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d certen_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      CI: "true"
+      CERTEN_TEST_DB: postgres://postgres:postgres@localhost:5432/certen_test?sslmode=disable
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: certenIO/certen-validator
+          path: certen-validator
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24.0"
+      - name: Apply the shared schema with the validator's runner
+        working-directory: certen-validator
+        env:
+          DATABASE_URL: ${{ env.CERTEN_TEST_DB }}
+        run: go run ./cmd/schemamigrate -applied-by proofs-service-ci
+      - run: go vet ./...
+      - run: go test ./... -count=1

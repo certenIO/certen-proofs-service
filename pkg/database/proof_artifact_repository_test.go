@@ -10,6 +10,7 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"os"
 	"testing"
 	"time"
@@ -18,15 +19,19 @@ import (
 	_ "github.com/lib/pq" // PostgreSQL driver
 )
 
-// Test database connection string (use test database or skip)
+// testDB is CERTEN_TEST_DB: a database the shared catalog (certen-validator db/migrations) has been
+// applied to. This service owns no schema, so it cannot build one; it only verifies what it is given.
 var testDB *sql.DB
 
 func TestMain(m *testing.M) {
-	// Try to connect to test database
 	connStr := os.Getenv("CERTEN_TEST_DB")
 	if connStr == "" {
-		// Skip database tests if no test DB configured
-		os.Exit(0)
+		if os.Getenv("CI") != "" {
+			fmt.Fprintln(os.Stderr, "CERTEN_TEST_DB is required in CI: a skipped database gate is not a green one")
+			os.Exit(1)
+		}
+		// Locally the non-database tests still run; each database test skips on a nil testDB.
+		os.Exit(m.Run())
 	}
 
 	var err error
@@ -34,11 +39,12 @@ func TestMain(m *testing.M) {
 	if err != nil {
 		panic("Failed to connect to test database: " + err.Error())
 	}
+	if err := (&Client{db: testDB}).VerifySharedSchema(context.Background()); err != nil {
+		fmt.Fprintf(os.Stderr, "CERTEN_TEST_DB is not a migrated shared schema: %v\n", err)
+		os.Exit(1)
+	}
 
-	// Run tests
 	code := m.Run()
-
-	// Cleanup
 	testDB.Close()
 	os.Exit(code)
 }
@@ -235,9 +241,24 @@ func TestUpdateProofAnchored(t *testing.T) {
 		_, _ = testDB.ExecContext(ctx, "DELETE FROM proof_artifacts WHERE proof_id = $1", proof.ProofID)
 	}()
 
-	// Update as anchored
-	anchorID := uuid.New()
+	// Update as anchored. proof_artifacts.anchor_id references a real anchor record, which in turn
+	// references its batch, so both exist first.
+	anchorID, batchID := uuid.New(), uuid.New()
 	anchorTxHash := "0x" + uuid.New().String()[:32]
+	// Remove in dependency order: the proof references the anchor record, which references the batch.
+	defer func() {
+		_, _ = testDB.ExecContext(ctx, "DELETE FROM proof_artifacts WHERE proof_id = $1", proof.ProofID)
+		_, _ = testDB.ExecContext(ctx, "DELETE FROM anchor_records WHERE anchor_id = $1", anchorID)
+		_, _ = testDB.ExecContext(ctx, "DELETE FROM anchor_batches WHERE id = $1", batchID)
+	}()
+	if _, err := testDB.ExecContext(ctx, `INSERT INTO anchor_batches (id) VALUES ($1)`, batchID); err != nil {
+		t.Fatalf("Failed to create anchor batch: %v", err)
+	}
+	if _, err := testDB.ExecContext(ctx,
+		`INSERT INTO anchor_records (anchor_id, batch_id, target_chain, anchor_tx_hash, anchor_block_number)
+		 VALUES ($1, $2, 'ethereum', $3, 12345678)`, anchorID, batchID, anchorTxHash); err != nil {
+		t.Fatalf("Failed to create anchor record: %v", err)
+	}
 	err = repo.UpdateProofAnchored(ctx, proof.ProofID, anchorID, anchorTxHash, 12345678, "ethereum")
 	if err != nil {
 		t.Fatalf("Failed to update proof as anchored: %v", err)

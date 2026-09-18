@@ -7,7 +7,6 @@ package database
 import (
 	"context"
 	"database/sql"
-	"os"
 	"testing"
 
 	"github.com/google/uuid"
@@ -26,109 +25,18 @@ import (
 // for a root no anchor ever held. This test holds both rows in one database and requires the shadow one
 // to report nothing.
 
+// quorumTestDB is the shared schema (see TestMain). The rows go into the real tables, with every real
+// constraint, because a hand-built fixture table tests the fixture rather than the database.
 func quorumTestDB(t *testing.T) *sql.DB {
 	t.Helper()
-	conn := os.Getenv("CERTEN_TEST_DB")
-	if conn == "" {
-		t.Skip("CERTEN_TEST_DB not set")
+	if testDB == nil {
+		t.Skip("Test database not configured")
 	}
-	db, err := sql.Open("postgres", conn)
-	if err != nil {
-		t.Fatalf("opening test database: %v", err)
-	}
-	if err := db.Ping(); err != nil {
-		t.Fatalf("connecting to test database: %v", err)
-	}
-	t.Cleanup(func() { db.Close() })
-	return db
+	return testDB
 }
 
-// createQuorumFixtureSchema builds only the columns GetProofByIntentID reads. A narrow fixture keeps the
-// test about the SQL under review rather than about the fleet's full schema.
-func createQuorumFixtureSchema(t *testing.T, db *sql.DB) {
-	t.Helper()
-	ctx := context.Background()
-	stmts := []string{
-		`DROP TABLE IF EXISTS anchor_records, batch_transactions, proof_artifacts, anchor_batches, certen_intents CASCADE`,
-		`CREATE TABLE anchor_batches (
-			id UUID PRIMARY KEY,
-			status TEXT NOT NULL DEFAULT 'confirmed',
-			merkle_root BYTEA,
-			transaction_count INT NOT NULL DEFAULT 0,
-			quorum_reached BOOLEAN NOT NULL DEFAULT FALSE,
-			chain_id BIGINT,
-			bundle_id TEXT
-		)`,
-		`CREATE TABLE batch_transactions (
-			batch_id UUID NOT NULL,
-			accumulate_tx_hash TEXT,
-			account_url TEXT NOT NULL DEFAULT '',
-			user_id TEXT,
-			intent_id TEXT,
-			from_chain TEXT NOT NULL DEFAULT 'accumulate',
-			to_chain TEXT NOT NULL DEFAULT 'base-sepolia',
-			from_address TEXT NOT NULL DEFAULT '',
-			to_address TEXT NOT NULL DEFAULT '',
-			amount TEXT NOT NULL DEFAULT '0',
-			token_symbol TEXT NOT NULL DEFAULT 'ACME',
-			adi_url TEXT NOT NULL DEFAULT '',
-			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-			created_at_client TIMESTAMPTZ
-		)`,
-		// GetProofByIntentID falls through to a lookup by accum_tx_hash when no proof row matches, so the
-		// fixture carries the columns that lookup selects. It stays empty in these tests; what matters is
-		// that the fall-through can run and return nothing.
-		`CREATE TABLE proof_artifacts (
-			proof_id UUID,
-			intent_id TEXT,
-			proof_type TEXT,
-			proof_version TEXT,
-			accum_tx_hash TEXT,
-			account_url TEXT,
-			batch_id UUID,
-			batch_position INT,
-			anchor_id UUID,
-			anchor_tx_hash TEXT,
-			anchor_block_number BIGINT,
-			anchor_chain TEXT,
-			merkle_root BYTEA,
-			leaf_hash BYTEA,
-			leaf_index INT,
-			gov_level TEXT,
-			proof_class TEXT,
-			validator_id TEXT,
-			status TEXT,
-			verification_status TEXT,
-			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-			anchored_at TIMESTAMPTZ,
-			verified_at TIMESTAMPTZ,
-			artifact_json JSONB,
-			artifact_hash BYTEA
-		)`,
-		// Multi-leg detection reads this table; an intent absent from it is single-leg.
-		`CREATE TABLE certen_intents (
-			intent_id TEXT PRIMARY KEY,
-			leg_count INT NOT NULL DEFAULT 1
-		)`,
-		`CREATE TABLE anchor_records (
-			batch_id UUID,
-			anchor_tx_hash TEXT,
-			confirmations INT,
-			is_final BOOLEAN
-		)`,
-	}
-	for _, s := range stmts {
-		if _, err := db.ExecContext(ctx, s); err != nil {
-			t.Fatalf("fixture schema: %v\n%s", err, s)
-		}
-	}
-	t.Cleanup(func() {
-		_, _ = db.ExecContext(context.Background(),
-			`DROP TABLE IF EXISTS anchor_records, batch_transactions, proof_artifacts, anchor_batches, certen_intents CASCADE`)
-	})
-}
-
-// insertAnchoredIntent adds one anchor row and the member row pointing at it.
+// insertAnchoredIntent adds one anchor row and the member row pointing at it, and removes both when the
+// test ends (the member row cascades from the anchor row).
 func insertAnchoredIntent(t *testing.T, db *sql.DB, intentID string, bundleID *string, quorumReached bool) {
 	t.Helper()
 	ctx := context.Background()
@@ -143,9 +51,12 @@ func insertAnchoredIntent(t *testing.T, db *sql.DB, intentID string, bundleID *s
 		batchID, []byte{0xaa}, quorumReached, chainID, bundleID); err != nil {
 		t.Fatalf("inserting anchor row: %v", err)
 	}
+	t.Cleanup(func() {
+		_, _ = db.ExecContext(context.Background(), `DELETE FROM anchor_batches WHERE id = $1`, batchID)
+	})
 	if _, err := db.ExecContext(ctx,
-		`INSERT INTO batch_transactions (batch_id, accumulate_tx_hash, account_url, intent_id)
-		 VALUES ($1, '0xabc', 'acc://example.acme/tokens', $2)`,
+		`INSERT INTO batch_transactions (batch_id, accumulate_tx_hash, account_url, tree_index, intent_id)
+		 VALUES ($1, '0xabc', 'acc://example.acme/tokens', 0, $2)`,
 		batchID, intentID); err != nil {
 		t.Fatalf("inserting member row: %v", err)
 	}
@@ -154,7 +65,6 @@ func insertAnchoredIntent(t *testing.T, db *sql.DB, intentID string, bundleID *s
 // A shadow row's quorum_reached must never reach the Transaction Center.
 func TestBatchQuorumMetIsFalseForAShadowRow(t *testing.T) {
 	db := quorumTestDB(t)
-	createQuorumFixtureSchema(t, db)
 
 	intentID := "intent-shadow-" + uuid.NewString()
 	insertAnchoredIntent(t, db, intentID, nil, true) // no bundle_id: a shadow row claiming a quorum
@@ -174,7 +84,6 @@ func TestBatchQuorumMetIsFalseForAShadowRow(t *testing.T) {
 // A canonical row still reports what it genuinely holds.
 func TestBatchQuorumMetIsTrueForACanonicalRow(t *testing.T) {
 	db := quorumTestDB(t)
-	createQuorumFixtureSchema(t, db)
 
 	bundleID := "0x" + uuid.NewString()
 	intentID := "intent-canonical-" + uuid.NewString()
@@ -196,7 +105,6 @@ func TestBatchQuorumMetIsTrueForACanonicalRow(t *testing.T) {
 // it does not replace the flag.
 func TestBatchQuorumMetIsFalseForACanonicalRowWithoutQuorum(t *testing.T) {
 	db := quorumTestDB(t)
-	createQuorumFixtureSchema(t, db)
 
 	bundleID := "0x" + uuid.NewString()
 	intentID := "intent-pending-" + uuid.NewString()
