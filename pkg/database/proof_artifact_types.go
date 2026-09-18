@@ -753,6 +753,65 @@ type BundleDownloadRecord struct {
 // LEVEL 4: External Chain Execution Proof Types
 // ============================================================================
 
+// ExternalChainResultRecord stores execution results with hash chain binding
+type ExternalChainResultRecord struct {
+	ResultID uuid.UUID `json:"result_id" db:"result_id"`
+	ProofID  uuid.UUID `json:"proof_id" db:"proof_id"`
+
+	// External Chain Reference
+	ChainID         string `json:"chain_id" db:"chain_id"`
+	ChainName       string `json:"chain_name" db:"chain_name"`
+	BlockNumber     int64  `json:"block_number" db:"block_number"`
+	BlockHash       []byte `json:"block_hash" db:"block_hash"`
+	TransactionHash []byte `json:"transaction_hash" db:"transaction_hash"`
+
+	// Execution Details
+	ExecutionStatus uint8  `json:"execution_status" db:"execution_status"`
+	GasUsed         int64  `json:"gas_used" db:"gas_used"`
+	ReturnData      []byte `json:"return_data,omitempty" db:"return_data"`
+
+	// Patricia/Merkle Proof (Keccak256-based for Ethereum)
+	StorageProofJSON json.RawMessage `json:"storage_proof_json,omitempty" db:"storage_proof_json"`
+	StorageProofHash []byte          `json:"storage_proof_hash,omitempty" db:"storage_proof_hash"`
+
+	// Hash Chain Binding (RFC8785 canonical JSON)
+	SequenceNumber     int64  `json:"sequence_number" db:"sequence_number"`
+	PreviousResultHash []byte `json:"previous_result_hash,omitempty" db:"previous_result_hash"`
+	ResultHash         []byte `json:"result_hash" db:"result_hash"`
+
+	// Binding to Level 3 Anchor Proof
+	AnchorProofHash []byte `json:"anchor_proof_hash" db:"anchor_proof_hash"`
+
+	// Full Artifact
+	ArtifactJSON json.RawMessage `json:"artifact_json" db:"artifact_json"`
+
+	// Verification
+	Verified   bool       `json:"verified" db:"verified"`
+	VerifiedAt *time.Time `json:"verified_at,omitempty" db:"verified_at"`
+
+	CreatedAt time.Time `json:"created_at" db:"created_at"`
+}
+
+// NewExternalChainResult is used to create a new execution result record
+type NewExternalChainResult struct {
+	ProofID            uuid.UUID       `json:"proof_id"`
+	ChainID            string          `json:"chain_id"`
+	ChainName          string          `json:"chain_name"`
+	BlockNumber        int64           `json:"block_number"`
+	BlockHash          []byte          `json:"block_hash"`
+	TransactionHash    []byte          `json:"transaction_hash"`
+	ExecutionStatus    uint8           `json:"execution_status"`
+	GasUsed            int64           `json:"gas_used"`
+	ReturnData         []byte          `json:"return_data,omitempty"`
+	StorageProofJSON   json.RawMessage `json:"storage_proof_json,omitempty"`
+	StorageProofHash   []byte          `json:"storage_proof_hash,omitempty"`
+	SequenceNumber     int64           `json:"sequence_number"`
+	PreviousResultHash []byte          `json:"previous_result_hash,omitempty"`
+	ResultHash         []byte          `json:"result_hash"`
+	AnchorProofHash    []byte          `json:"anchor_proof_hash"`
+	ArtifactJSON       json.RawMessage `json:"artifact_json"`
+}
+
 // BLSAttestationRecord stores individual BLS12-381 attestations
 type BLSAttestationRecord struct {
 	AttestationID uuid.UUID `json:"attestation_id" db:"attestation_id"`
@@ -781,6 +840,19 @@ type BLSAttestationRecord struct {
 
 	AttestedAt time.Time `json:"attested_at" db:"attested_at"`
 	CreatedAt  time.Time `json:"created_at" db:"created_at"`
+}
+
+// NewBLSAttestation is used to create a new BLS attestation record
+type NewBLSAttestation struct {
+	ResultID      uuid.UUID `json:"result_id"`
+	SnapshotID    uuid.UUID `json:"snapshot_id"`
+	ValidatorID   string    `json:"validator_id"`
+	PublicKey     []byte    `json:"public_key"`
+	MessageHash   []byte    `json:"message_hash"`
+	Signature     []byte    `json:"signature"`
+	Weight        int64     `json:"weight"`
+	SubgroupValid bool      `json:"subgroup_valid"`
+	AttestedAt    time.Time `json:"attested_at"`
 }
 
 // AggregatedAttestationRecord stores BLS aggregated attestations
@@ -819,12 +891,140 @@ type AggregatedAttestationRecord struct {
 	CreatedAt    time.Time `json:"created_at" db:"created_at"`
 }
 
+// NewAggregatedAttestation is used to create a new aggregated attestation record
+type NewAggregatedAttestation struct {
+	ResultID                uuid.UUID       `json:"result_id"`
+	SnapshotID              uuid.UUID       `json:"snapshot_id"`
+	MessageHash             []byte          `json:"message_hash"`
+	AggregatedSignature     []byte          `json:"aggregated_signature"`
+	AggregatedPublicKey     []byte          `json:"aggregated_public_key"`
+	ParticipantIDs          json.RawMessage `json:"participant_ids"`
+	ParticipantCount        int             `json:"participant_count"`
+	TotalWeight             int64           `json:"total_weight"`
+	ThresholdWeight         int64           `json:"threshold_weight"`
+	AchievedWeight          int64           `json:"achieved_weight"`
+	ThresholdMet            bool            `json:"threshold_met"`
+	MessageConsistencyValid bool            `json:"message_consistency_valid"`
+	AggregatedAt            time.Time       `json:"aggregated_at"`
+}
+
+// ValidatorSetSnapshotRecord stores validator set state at attestation time
+type ValidatorSetSnapshotRecord struct {
+	SnapshotID uuid.UUID `json:"snapshot_id" db:"snapshot_id"`
+
+	// Snapshot Binding
+	BlockNumber int64  `json:"block_number" db:"block_number"`
+	BlockHash   []byte `json:"block_hash,omitempty" db:"block_hash"`
+
+	// Validator Set
+	ValidatorsJSON json.RawMessage `json:"validators_json" db:"validators_json"` // Array of ValidatorEntry
+
+	// Computed Values
+	ValidatorRoot   []byte `json:"validator_root" db:"validator_root"` // Merkle root of validators
+	ValidatorCount  int    `json:"validator_count" db:"validator_count"`
+	TotalWeight     int64  `json:"total_weight" db:"total_weight"`
+	ThresholdWeight int64  `json:"threshold_weight" db:"threshold_weight"` // 2/3+1
+
+	// Snapshot Hash (RFC8785 canonical JSON)
+	SnapshotHash []byte `json:"snapshot_hash" db:"snapshot_hash"`
+
+	// Chain Reference
+	ChainID   string `json:"chain_id" db:"chain_id"`
+	ChainName string `json:"chain_name" db:"chain_name"`
+
+	CreatedAt time.Time `json:"created_at" db:"created_at"`
+}
+
+// NewValidatorSetSnapshot is used to create a new validator set snapshot
+type NewValidatorSetSnapshot struct {
+	BlockNumber     int64           `json:"block_number"`
+	BlockHash       []byte          `json:"block_hash,omitempty"`
+	ValidatorsJSON  json.RawMessage `json:"validators_json"`
+	ValidatorRoot   []byte          `json:"validator_root"`
+	ValidatorCount  int             `json:"validator_count"`
+	TotalWeight     int64           `json:"total_weight"`
+	ThresholdWeight int64           `json:"threshold_weight"`
+	SnapshotHash    []byte          `json:"snapshot_hash"`
+	ChainID         string          `json:"chain_id"`
+	ChainName       string          `json:"chain_name"`
+}
+
 // ValidatorEntry represents a single validator in a snapshot
 type ValidatorEntry struct {
 	ValidatorID string `json:"validator_id"`
 	PublicKey   []byte `json:"public_key"`   // BLS12-381 G2 point
 	Weight      int64  `json:"weight"`
 	Index       int    `json:"index"`        // Position in validator set
+}
+
+// ProofCycleCompletionRecord tracks complete proof cycles through all 4 levels
+type ProofCycleCompletionRecord struct {
+	CompletionID uuid.UUID `json:"completion_id" db:"completion_id"`
+	ProofID      uuid.UUID `json:"proof_id" db:"proof_id"`
+
+	// Level 1: Chained Proof
+	Level1Complete bool      `json:"level1_complete" db:"level1_complete"`
+	Level1ProofID  uuid.UUID `json:"level1_proof_id,omitempty" db:"level1_proof_id"`
+	Level1Hash     []byte    `json:"level1_hash,omitempty" db:"level1_hash"`
+
+	// Level 2: Governance Proof
+	Level2Complete bool      `json:"level2_complete" db:"level2_complete"`
+	Level2ProofID  uuid.UUID `json:"level2_proof_id,omitempty" db:"level2_proof_id"`
+	Level2Hash     []byte    `json:"level2_hash,omitempty" db:"level2_hash"`
+
+	// Level 3: Anchor Proof
+	Level3Complete bool      `json:"level3_complete" db:"level3_complete"`
+	Level3ProofID  uuid.UUID `json:"level3_proof_id,omitempty" db:"level3_proof_id"`
+	Level3Hash     []byte    `json:"level3_hash,omitempty" db:"level3_hash"`
+
+	// Level 4: Execution Proof
+	Level4Complete bool      `json:"level4_complete" db:"level4_complete"`
+	Level4ResultID uuid.UUID `json:"level4_result_id,omitempty" db:"level4_result_id"`
+	Level4Hash     []byte    `json:"level4_hash,omitempty" db:"level4_hash"`
+
+	// Cross-Level Bindings Valid
+	BindingsValid bool `json:"bindings_valid" db:"bindings_valid"`
+
+	// Complete Cycle Hash (all levels bound together)
+	CycleHash []byte `json:"cycle_hash" db:"cycle_hash"`
+
+	// Cycle Status
+	AllLevelsComplete bool `json:"all_levels_complete" db:"all_levels_complete"`
+
+	// Timestamps
+	Level1At    *time.Time `json:"level1_at,omitempty" db:"level1_at"`
+	Level2At    *time.Time `json:"level2_at,omitempty" db:"level2_at"`
+	Level3At    *time.Time `json:"level3_at,omitempty" db:"level3_at"`
+	Level4At    *time.Time `json:"level4_at,omitempty" db:"level4_at"`
+	CompletedAt *time.Time `json:"completed_at,omitempty" db:"completed_at"`
+
+	CreatedAt time.Time `json:"created_at" db:"created_at"`
+	UpdatedAt time.Time `json:"updated_at" db:"updated_at"`
+}
+
+// NewProofCycleCompletion is used to create a new proof cycle completion record
+type NewProofCycleCompletion struct {
+	ProofID uuid.UUID `json:"proof_id"`
+}
+
+// ProofCycleCompletionUpdate is used to update a proof cycle completion record
+type ProofCycleCompletionUpdate struct {
+	CompletionID      uuid.UUID  `json:"completion_id"`
+	Level1Complete    *bool      `json:"level1_complete,omitempty"`
+	Level1ProofID     *uuid.UUID `json:"level1_proof_id,omitempty"`
+	Level1Hash        []byte     `json:"level1_hash,omitempty"`
+	Level2Complete    *bool      `json:"level2_complete,omitempty"`
+	Level2ProofID     *uuid.UUID `json:"level2_proof_id,omitempty"`
+	Level2Hash        []byte     `json:"level2_hash,omitempty"`
+	Level3Complete    *bool      `json:"level3_complete,omitempty"`
+	Level3ProofID     *uuid.UUID `json:"level3_proof_id,omitempty"`
+	Level3Hash        []byte     `json:"level3_hash,omitempty"`
+	Level4Complete    *bool      `json:"level4_complete,omitempty"`
+	Level4ResultID    *uuid.UUID `json:"level4_result_id,omitempty"`
+	Level4Hash        []byte     `json:"level4_hash,omitempty"`
+	BindingsValid     *bool      `json:"bindings_valid,omitempty"`
+	CycleHash         []byte     `json:"cycle_hash,omitempty"`
+	AllLevelsComplete *bool      `json:"all_levels_complete,omitempty"`
 }
 
 // ============================================================================
