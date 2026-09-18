@@ -1,7 +1,7 @@
 // Copyright 2025 Certen Protocol
 //
 // Database Types for Certen Proof Artifact Storage
-// These types map directly to the PostgreSQL schema defined in migrations/001_initial_schema.sql
+// These types map to the shared PostgreSQL schema owned by certen-validator db/migrations
 //
 // Per Technical Whitepaper Section 3.4:
 // - Proof Architecture (3.4.1)

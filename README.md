@@ -64,11 +64,10 @@ docker-compose up -d
 ### Manual Setup
 
 ```bash
-# Start PostgreSQL and run migrations
+# Start PostgreSQL and apply the shared schema. It is owned by certen-validator
+# (db/migrations); this service never runs DDL and refuses to start without it.
 psql -U postgres -c "CREATE DATABASE certen_proofs;"
-for f in pkg/database/migrations/*.sql; do
-  psql -U postgres -d certen_proofs -f "$f"
-done
+(cd ../certen-validator &&   DATABASE_URL="postgres://postgres@localhost:5432/certen_proofs?sslmode=disable"   go run ./cmd/schemamigrate)
 
 # Build and run the API service
 go build -o proof-service ./cmd/proof-service
@@ -139,17 +138,16 @@ npm run dev
 | `RATE_LIMIT_REQUESTS` | `100` | Requests per minute per client |
 | `DEVELOPMENT_MODE` | `false` | Enable relaxed validation |
 
-### Database Migrations
+### Database Schema
 
-The service uses 5 migration files to set up the PostgreSQL schema:
+This service owns no schema. `certen_proofs` is shared with the validators, and its one migration stream
+lives in `certen-validator` (`db/migrations`, applied by `schemamigrate` or `validator migrate up` during
+the validator deploy). At startup the service checks `certen_schema_history` for every migration in
+`database.RequiredSchema`, by version and SHA-256, and exits if any is missing or different.
 
-| Migration | Description |
-|-----------|-------------|
-| `001_initial_schema.sql` | Core tables (batches, transactions, anchors, proofs) |
-| `002_comprehensive_proof_schema.sql` | Extended metadata, multi-validator attestations |
-| `003_proof_service_enhancements.sql` | Bundles, pricing tiers, custody chain, API keys |
-| `004_level4_execution_proof.sql` | Level 4 execution proofs, external chain tracking |
-| `005_anchor_proof_enhancements.sql` | Extended anchor metadata, cross-chain commitments |
+`TestRepositorySQLPreparesAgainstSharedSchema` prepares every SQL statement in this service against a
+database migrated to that point (`CERTEN_TEST_DB`). Raise `RequiredSchema` only together with a green run
+of that test against the newer catalog.
 
 ## Project Structure
 
@@ -162,7 +160,6 @@ certen-proofs-service/
 │   ├── config/                 # Configuration management
 │   │   └── config.go
 │   ├── database/               # PostgreSQL layer
-│   │   ├── migrations/         # SQL schema migrations
 │   │   ├── client.go           # DB connection & pooling
 │   │   ├── repositories.go     # Repository factory
 │   │   ├── types.go            # Database models

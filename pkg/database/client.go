@@ -1,28 +1,22 @@
 // Copyright 2025 Certen Protocol
 //
 // Database Client for Certen Proof Artifact Storage
-// Provides connection pooling, health checks, and migration support
+// Provides connection pooling and health checks. The schema is owned by the validator's shared
+// catalog (certen-validator db/migrations); this service only verifies it.
 
 package database
 
 import (
 	"context"
 	"database/sql"
-	"embed"
 	"fmt"
-	"io/fs"
 	"log"
-	"sort"
-	"strings"
 	"time"
 
 	_ "github.com/lib/pq" // PostgreSQL driver
 
 	"github.com/certen/proofs-service/pkg/config"
 )
-
-//go:embed migrations/*.sql
-var migrationsFS embed.FS
 
 // Client represents a database client with connection pooling and automatic reconnection
 type Client struct {
@@ -146,6 +140,59 @@ func (c *Client) DB() *sql.DB {
 	return c.db
 }
 
+// RequiredSchema is the shared catalog this service's SQL was proven against: each version with the exact
+// SHA-256 of its file in certen-validator db/migrations. The schema-prepare test prepares every statement
+// in this service against a database migrated to exactly this point, so raise it only together with a
+// green run of that test against the newer catalog.
+var RequiredSchema = []SchemaVersion{
+	{"00000", "dacf9261f48333444c3657532a575ae02ed583fe57f516aef7af3e26cd7c6a14"},
+	{"00001", "ed6ddda58c77649769ecff8ca5bbc555ab36e93118106339155b48c1443028c6"},
+	{"00002", "866449e035d3abb02d988dcfccbebc9d5f78f70f4e959772fe3721306d15b84f"},
+	{"00003", "a503d870c7cdb51b41842a6411b41571946c26d62b193577a884968861787f42"},
+}
+
+// SchemaVersion is one applied migration of the shared catalog.
+type SchemaVersion struct {
+	Version string
+	SHA256  string
+}
+
+// VerifySharedSchema confirms the deploy has applied every migration this service needs, byte for byte.
+// The service never performs DDL: a missing, older or altered schema is a startup failure, not something
+// to repair. History rows newer than RequiredSchema are expected during a rolling deploy and are ignored.
+func (c *Client) VerifySharedSchema(ctx context.Context) error {
+	rows, err := c.db.QueryContext(ctx, `SELECT version, sha256 FROM public.certen_schema_history`)
+	if err != nil {
+		return fmt.Errorf("shared schema history unavailable (run the validator's schema migration first): %w", err)
+	}
+	defer rows.Close()
+	applied := make(map[string]string)
+	for rows.Next() {
+		var version, sum string
+		if err := rows.Scan(&version, &sum); err != nil {
+			return fmt.Errorf("read shared schema history: %w", err)
+		}
+		applied[version] = sum
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("read shared schema history: %w", err)
+	}
+	return checkSchemaHistory(applied, RequiredSchema)
+}
+
+func checkSchemaHistory(applied map[string]string, required []SchemaVersion) error {
+	for _, want := range required {
+		got, ok := applied[want.Version]
+		if !ok {
+			return fmt.Errorf("shared schema is older than this service requires: migration %s is not applied", want.Version)
+		}
+		if got != want.SHA256 {
+			return fmt.Errorf("shared schema migration %s has checksum %s, this service requires %s", want.Version, got, want.SHA256)
+		}
+	}
+	return nil
+}
+
 // Close closes the database connection and stops the health monitor
 func (c *Client) Close() error {
 	if c.stopCh != nil {
@@ -207,171 +254,6 @@ type HealthStatus struct {
 	WaitDuration       time.Duration `json:"wait_duration"`
 	MaxOpenConnections int           `json:"max_open_connections"`
 	CheckedAt          time.Time     `json:"checked_at"`
-}
-
-// ============================================================================
-// MIGRATION SUPPORT
-// ============================================================================
-
-// MigrateUp runs all pending database migrations
-func (c *Client) MigrateUp(ctx context.Context) error {
-	c.logger.Println("Running database migrations...")
-
-	// Get all migration files
-	migrations, err := c.getMigrations()
-	if err != nil {
-		return fmt.Errorf("failed to get migrations: %w", err)
-	}
-
-	// Get already applied migrations
-	applied, err := c.getAppliedMigrations(ctx)
-	if err != nil {
-		// If table doesn't exist, that's fine - first migration will create it
-		if !strings.Contains(err.Error(), "does not exist") {
-			return fmt.Errorf("failed to get applied migrations: %w", err)
-		}
-		applied = make(map[string]bool)
-	}
-
-	// Apply pending migrations
-	for _, migration := range migrations {
-		if applied[migration.Version] {
-			c.logger.Printf("  Skipping %s (already applied)", migration.Version)
-			continue
-		}
-
-		c.logger.Printf("  Applying %s...", migration.Version)
-		if err := c.applyMigration(ctx, migration); err != nil {
-			return fmt.Errorf("failed to apply migration %s: %w", migration.Version, err)
-		}
-		c.logger.Printf("  Applied %s successfully", migration.Version)
-	}
-
-	c.logger.Println("Migrations complete")
-	return nil
-}
-
-// Migration represents a database migration
-type Migration struct {
-	Version  string
-	Filename string
-	SQL      string
-}
-
-// getMigrations reads all migration files from the embedded filesystem
-func (c *Client) getMigrations() ([]Migration, error) {
-	var migrations []Migration
-
-	err := fs.WalkDir(migrationsFS, "migrations", func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if d.IsDir() {
-			return nil
-		}
-		if !strings.HasSuffix(path, ".sql") {
-			return nil
-		}
-
-		content, err := migrationsFS.ReadFile(path)
-		if err != nil {
-			return fmt.Errorf("failed to read %s: %w", path, err)
-		}
-
-		// Extract version from filename (e.g., "001_initial_schema.sql" -> "001_initial_schema")
-		filename := d.Name()
-		version := strings.TrimSuffix(filename, ".sql")
-
-		migrations = append(migrations, Migration{
-			Version:  version,
-			Filename: filename,
-			SQL:      string(content),
-		})
-		return nil
-	})
-
-	if err != nil {
-		return nil, err
-	}
-
-	// Sort by version
-	sort.Slice(migrations, func(i, j int) bool {
-		return migrations[i].Version < migrations[j].Version
-	})
-
-	return migrations, nil
-}
-
-// getAppliedMigrations returns a map of already applied migration versions
-func (c *Client) getAppliedMigrations(ctx context.Context) (map[string]bool, error) {
-	rows, err := c.db.QueryContext(ctx, "SELECT version FROM schema_migrations")
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	applied := make(map[string]bool)
-	for rows.Next() {
-		var version string
-		if err := rows.Scan(&version); err != nil {
-			return nil, err
-		}
-		applied[version] = true
-	}
-
-	return applied, rows.Err()
-}
-
-// applyMigration applies a single migration in a transaction
-func (c *Client) applyMigration(ctx context.Context, migration Migration) error {
-	tx, err := c.db.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("failed to begin transaction: %w", err)
-	}
-	defer tx.Rollback()
-
-	// Execute the migration SQL
-	if _, err := tx.ExecContext(ctx, migration.SQL); err != nil {
-		return fmt.Errorf("failed to execute migration SQL: %w", err)
-	}
-
-	// The migration SQL should record itself in schema_migrations
-	// But if it's the first migration, we need to handle that specially
-	// (The migration SQL handles this via INSERT ... ON CONFLICT DO NOTHING)
-
-	return tx.Commit()
-}
-
-// MigrationStatus returns the status of all migrations
-func (c *Client) MigrationStatus(ctx context.Context) ([]MigrationInfo, error) {
-	migrations, err := c.getMigrations()
-	if err != nil {
-		return nil, fmt.Errorf("failed to get migrations: %w", err)
-	}
-
-	applied, err := c.getAppliedMigrations(ctx)
-	if err != nil {
-		if !strings.Contains(err.Error(), "does not exist") {
-			return nil, fmt.Errorf("failed to get applied migrations: %w", err)
-		}
-		applied = make(map[string]bool)
-	}
-
-	var status []MigrationInfo
-	for _, m := range migrations {
-		status = append(status, MigrationInfo{
-			Version:  m.Version,
-			Applied:  applied[m.Version],
-		})
-	}
-
-	return status, nil
-}
-
-// MigrationInfo represents the status of a single migration
-type MigrationInfo struct {
-	Version string `json:"version"`
-	Applied bool   `json:"applied"`
 }
 
 // ============================================================================

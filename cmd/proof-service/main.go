@@ -72,6 +72,16 @@ func main() {
 	} else {
 		logger.Printf("Database connected successfully")
 		defer dbClient.Close()
+		// The deploy applies the shared schema; this service only checks it. Running against a schema
+		// older than its SQL would fail request by request, so refuse to start instead.
+		verifyCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		err := dbClient.VerifySharedSchema(verifyCtx)
+		cancel()
+		if err != nil {
+			logger.Fatalf("Shared database schema verification failed: %v", err)
+		}
+		logger.Printf("Shared database schema verified through migration %s",
+			database.RequiredSchema[len(database.RequiredSchema)-1].Version)
 	}
 
 	// Create repositories
