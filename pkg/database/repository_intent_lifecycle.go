@@ -58,7 +58,7 @@ func (r *IntentLifecycleRepository) GetByTxHash(ctx context.Context, txHash stri
 	`
 
 	lc := &IntentLifecycle{}
-	err := r.client.QueryRowContext(ctx, query, txHash).Scan(
+	err := r.client.QueryRowContext(ctx, query, TransactionHashKey(txHash)).Scan(
 		&lc.ID, &lc.IntentID, &lc.AccumTxHash, &lc.UserID, &lc.Status,
 		&lc.TargetChain, &lc.ProofClass, &lc.ErrorMessage, &lc.BlockHeight,
 		&lc.CycleID, &lc.WriteBackTx,
