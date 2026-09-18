@@ -1,7 +1,7 @@
 // Copyright 2025 Certen Protocol
 //
 // Database Types for Certen Proof Artifact Storage
-// These types map directly to the PostgreSQL schema defined in migrations/001_initial_schema.sql
+// These types map to the shared PostgreSQL schema owned by certen-validator db/migrations
 //
 // Per Technical Whitepaper Section 3.4:
 // - Proof Architecture (3.4.1)
@@ -75,25 +75,31 @@ type MerklePathNode struct {
 // BatchTransaction represents an individual transaction in an anchor batch
 // Maps to: batch_transactions table
 type BatchTransaction struct {
-	ID              int64          `db:"id" json:"id"`
-	BatchID         uuid.UUID      `db:"batch_id" json:"batch_id"`
-	AccumTxHash     string         `db:"accumulate_tx_hash" json:"accumulate_tx_hash"`
-	AccountURL      string         `db:"account_url" json:"account_url"`
-	TreeIndex       int            `db:"tree_index" json:"tree_index"`
-	MerklePath      json.RawMessage `db:"merkle_path" json:"merkle_path"` // JSON array of MerklePathNode
-	TxHash          []byte         `db:"transaction_hash" json:"transaction_hash"` // 32 bytes
-	ChainedProof    json.RawMessage `db:"chained_proof" json:"chained_proof,omitempty"`
-	ChainedValid    bool           `db:"chained_proof_valid" json:"chained_proof_valid"`
-	GovProof        json.RawMessage `db:"governance_proof" json:"governance_proof,omitempty"`
-	GovLevel        sql.NullString `db:"governance_level" json:"governance_level,omitempty"`
-	GovValid        bool           `db:"governance_valid" json:"governance_valid"`
-	IntentType      sql.NullString `db:"intent_type" json:"intent_type,omitempty"`
-	IntentData      json.RawMessage `db:"intent_data" json:"intent_data,omitempty"`
-	CreatedAt       time.Time      `db:"created_at" json:"created_at"`
+	ID           int64           `db:"id" json:"id"`
+	BatchID      uuid.UUID       `db:"batch_id" json:"batch_id"`
+	AccumTxHash  string          `db:"accumulate_tx_hash" json:"accumulate_tx_hash"`
+	AccountURL   string          `db:"account_url" json:"account_url"`
+	TreeIndex    int             `db:"tree_index" json:"tree_index"`
+	MerklePath   json.RawMessage `db:"merkle_path" json:"merkle_path"`           // JSON array of MerklePathNode
+	TxHash       []byte          `db:"transaction_hash" json:"transaction_hash"` // 32 bytes
+	ChainedProof json.RawMessage `db:"chained_proof" json:"chained_proof,omitempty"`
+	ChainedValid bool            `db:"chained_proof_valid" json:"chained_proof_valid"`
+	GovProof     json.RawMessage `db:"governance_proof" json:"governance_proof,omitempty"`
+	GovLevel     sql.NullString  `db:"governance_level" json:"governance_level,omitempty"`
+	GovValid     bool            `db:"governance_valid" json:"governance_valid"`
+	IntentType   sql.NullString  `db:"intent_type" json:"intent_type,omitempty"`
+	IntentData   json.RawMessage `db:"intent_data" json:"intent_data,omitempty"`
+	// Events the legs committed to emitting (RB-4). `omitempty` is correct HERE and only here: a nil
+	// RawMessage means the commitment is unknown, and the reader downstream is built to tell an ABSENT
+	// key from an EMPTY array. Do not give this a default. See migration 012.
+	DeclaredEffects json.RawMessage `db:"declared_effects" json:"declared_effects,omitempty"`
+	CreatedAt       time.Time       `db:"created_at" json:"created_at"`
+
+	// Intent Tracking (for Firestore linking)
+	UserID   sql.NullString `db:"user_id" json:"user_id,omitempty"`
+	IntentID sql.NullString `db:"intent_id" json:"intent_id,omitempty"`
 
 	// Intent Metadata (for Transaction Center integration)
-	UserID          sql.NullString `db:"user_id" json:"user_id,omitempty"`
-	IntentID        sql.NullString `db:"intent_id" json:"intent_id,omitempty"`
 	FromChain       sql.NullString `db:"from_chain" json:"from_chain,omitempty"`
 	ToChain         sql.NullString `db:"to_chain" json:"to_chain,omitempty"`
 	FromAddress     sql.NullString `db:"from_address" json:"from_address,omitempty"`
@@ -102,6 +108,10 @@ type BatchTransaction struct {
 	TokenSymbol     sql.NullString `db:"token_symbol" json:"token_symbol,omitempty"`
 	AdiURL          sql.NullString `db:"adi_url" json:"adi_url,omitempty"`
 	CreatedAtClient sql.NullTime   `db:"created_at_client" json:"created_at_client,omitempty"`
+
+	// Multi-Leg Support
+	LegID            sql.NullString `db:"leg_id" json:"leg_id,omitempty"`
+	MultiLegIntentID sql.NullString `db:"multi_leg_intent_id" json:"multi_leg_intent_id,omitempty"`
 }
 
 // GetMerklePath deserializes the merkle path from JSON
@@ -175,21 +185,27 @@ const (
 	GovLevelG2 GovernanceLevel = "G2" // Governance + outcome binding
 )
 
-// CertenAnchorProof represents a complete Certen proof
-// Maps to: certen_anchor_proofs table
+// CertenAnchorProof is the four-component Certen proof per whitepaper 3.4.1.
+// Maps to: certen_anchor_proofs
+//
+// The components are stored both as the JSON documents a verifier reads (merkle_proof_json,
+// anchor_ref_json, chained_proof_json, governance_proof_json, full_proof_json) and as the typed columns
+// queries filter on. ProofHash is sha256 over FullProof, which is fixed when the proof is created;
+// confirmations and verification are recorded beside it, not inside it.
 type CertenAnchorProof struct {
-	ProofID          uuid.UUID       `db:"proof_id" json:"proof_id"`
-	BatchID          uuid.UUID       `db:"batch_id" json:"batch_id"`
-	AnchorID         uuid.NullUUID   `db:"anchor_id" json:"anchor_id,omitempty"`
-	TransactionID    int64           `db:"transaction_id" json:"transaction_id"`
+	ProofID         uuid.UUID     `db:"id" json:"proof_id"`
+	ProofArtifactID uuid.NullUUID `db:"proof_artifact_id" json:"proof_artifact_id,omitempty"`
+	BatchID         uuid.NullUUID `db:"batch_id" json:"batch_id,omitempty"`
+	AnchorID        uuid.NullUUID `db:"anchor_id" json:"anchor_id,omitempty"`
+	TransactionID   sql.NullInt64 `db:"transaction_id" json:"transaction_id,omitempty"`
 
 	// Original Accumulate tx
-	AccumTxHash      string          `db:"accumulate_tx_hash" json:"accumulate_tx_hash"`
-	AccountURL       string          `db:"account_url" json:"account_url"`
+	AccumTxHash string `db:"accum_tx_hash" json:"accumulate_tx_hash"`
+	AccountURL  string `db:"account_url" json:"account_url"`
 
 	// Component 1: Transaction Inclusion Proof
-	MerkleRoot       []byte          `db:"merkle_root" json:"merkle_root"` // 32 bytes
-	MerkleInclusion  json.RawMessage `db:"merkle_inclusion_proof" json:"merkle_inclusion_proof"`
+	MerkleRoot      []byte          `db:"merkle_root" json:"merkle_root"` // 32 bytes
+	MerkleInclusion json.RawMessage `db:"merkle_proof_json" json:"merkle_inclusion_proof"`
 
 	// Component 2: Anchor Reference
 	AnchorChain       TargetChain     `db:"anchor_chain" json:"anchor_chain"`
@@ -197,30 +213,35 @@ type CertenAnchorProof struct {
 	AnchorBlockNumber int64           `db:"anchor_block_number" json:"anchor_block_number"`
 	AnchorBlockHash   sql.NullString  `db:"anchor_block_hash" json:"anchor_block_hash,omitempty"`
 	AnchorConfirms    int             `db:"anchor_confirmations" json:"anchor_confirmations"`
+	AnchorRef         json.RawMessage `db:"anchor_ref_json" json:"anchor_reference,omitempty"`
 
 	// Component 3: State Proof (ChainedProof L1-L3)
-	AccumStateProof  json.RawMessage `db:"accumulate_state_proof" json:"accumulate_state_proof,omitempty"`
+	AccumStateProof  json.RawMessage `db:"chained_proof_json" json:"accumulate_state_proof,omitempty"`
 	AccumBlockHeight sql.NullInt64   `db:"accumulate_block_height" json:"accumulate_block_height,omitempty"`
 	AccumBVN         sql.NullString  `db:"accumulate_bvn" json:"accumulate_bvn,omitempty"`
 
 	// Component 4: Authority Proof (GovernanceProof G0-G2)
-	GovProof         json.RawMessage `db:"governance_proof" json:"governance_proof,omitempty"`
-	GovLevel         sql.NullString  `db:"governance_level" json:"governance_level,omitempty"`
-	GovValid         bool            `db:"governance_valid" json:"governance_valid"`
+	GovProof json.RawMessage `db:"governance_proof_json" json:"governance_proof,omitempty"`
+	GovLevel sql.NullString  `db:"governance_level" json:"governance_level,omitempty"`
+	GovValid bool            `db:"governance_valid" json:"governance_valid"`
+
+	// The whole proof, and the hash that identifies it
+	FullProof json.RawMessage `db:"full_proof_json" json:"full_proof,omitempty"`
+	ProofHash []byte          `db:"proof_hash" json:"proof_hash,omitempty"`
 
 	// Verification status
-	Verified         bool            `db:"verified" json:"verified"`
-	VerificationTime sql.NullTime    `db:"verification_time" json:"verification_time,omitempty"`
+	Verified         bool            `db:"is_verified" json:"verified"`
+	VerificationTime sql.NullTime    `db:"verified_at" json:"verification_time,omitempty"`
 	VerifyDetails    json.RawMessage `db:"verification_details" json:"verification_details,omitempty"`
 
 	// Validator info
-	ValidatorID      string          `db:"validator_id" json:"validator_id"`
-	ValidatorSig     []byte          `db:"validator_signature" json:"validator_signature,omitempty"`
+	ValidatorID  string `db:"validator_id" json:"validator_id"`
+	ValidatorSig []byte `db:"validator_signature" json:"validator_signature,omitempty"`
 
 	// Metadata
-	ProofVersion     string          `db:"proof_version" json:"proof_version"`
-	CreatedAt        time.Time       `db:"created_at" json:"created_at"`
-	UpdatedAt        time.Time       `db:"updated_at" json:"updated_at"`
+	ProofVersion string    `db:"proof_version" json:"proof_version"`
+	CreatedAt    time.Time `db:"created_at" json:"created_at"`
+	UpdatedAt    time.Time `db:"updated_at" json:"updated_at"`
 }
 
 // GetMerkleInclusionProof deserializes the merkle inclusion proof
@@ -281,25 +302,29 @@ const (
 	RequestStatusBatched    RequestStatus = "batched"
 	RequestStatusCompleted  RequestStatus = "completed"
 	RequestStatusFailed     RequestStatus = "failed"
+	RequestStatusCancelled  RequestStatus = "cancelled"
 )
 
 // ProofRequest represents an incoming proof request
 // Maps to: proof_requests table
 type ProofRequest struct {
-	RequestID    uuid.UUID       `db:"request_id" json:"request_id"`
-	AccumTxHash  sql.NullString  `db:"accumulate_tx_hash" json:"accumulate_tx_hash,omitempty"`
-	AccountURL   sql.NullString  `db:"account_url" json:"account_url,omitempty"`
-	RequestType  RequestType     `db:"request_type" json:"request_type"`
-	Priority     RequestPriority `db:"priority" json:"priority"`
-	Status       RequestStatus   `db:"status" json:"status"`
-	BatchID      uuid.NullUUID   `db:"batch_id" json:"batch_id,omitempty"`
-	ProofID      uuid.NullUUID   `db:"proof_id" json:"proof_id,omitempty"`
-	RequestedAt  time.Time       `db:"requested_at" json:"requested_at"`
-	ProcessedAt  sql.NullTime    `db:"processed_at" json:"processed_at,omitempty"`
-	CompletedAt  sql.NullTime    `db:"completed_at" json:"completed_at,omitempty"`
-	RequesterID  sql.NullString  `db:"requester_id" json:"requester_id,omitempty"`
-	ErrorMessage sql.NullString  `db:"error_message" json:"error_message,omitempty"`
-	RetryCount   int             `db:"retry_count" json:"retry_count"`
+	RequestID       uuid.UUID       `db:"request_id" json:"request_id"`
+	AccumTxHash     sql.NullString  `db:"accum_tx_hash" json:"accumulate_tx_hash,omitempty"`
+	AccountURL      sql.NullString  `db:"account_url" json:"account_url,omitempty"`
+	RequestType     RequestType     `db:"proof_class" json:"request_type"`
+	GovernanceLevel sql.NullString  `db:"governance_level" json:"governance_level,omitempty"`
+	Priority        RequestPriority `db:"priority" json:"priority"`
+	Status          RequestStatus   `db:"status" json:"status"`
+	BatchID         uuid.NullUUID   `db:"batch_id" json:"batch_id,omitempty"`
+	ProofID         uuid.NullUUID   `db:"proof_id" json:"proof_id,omitempty"`
+	APIKeyID        uuid.NullUUID   `db:"api_key_id" json:"api_key_id,omitempty"`
+	CallbackURL     sql.NullString  `db:"callback_url" json:"callback_url,omitempty"`
+	RequestedAt     time.Time       `db:"created_at" json:"requested_at"`
+	ProcessedAt     sql.NullTime    `db:"processed_at" json:"processed_at,omitempty"`
+	CompletedAt     sql.NullTime    `db:"completed_at" json:"completed_at,omitempty"`
+	RequesterID     sql.NullString  `db:"requester_id" json:"requester_id,omitempty"`
+	ErrorMessage    sql.NullString  `db:"error_message" json:"error_message,omitempty"`
+	RetryCount      int             `db:"retry_count" json:"retry_count"`
 }
 
 // ============================================================================
@@ -310,6 +335,7 @@ type ProofRequest struct {
 type NewAnchorBatch struct {
 	BatchType   BatchType
 	ValidatorID string
+	TargetChain string // Target chain for anchoring (e.g., "ton-testnet", "sepolia")
 }
 
 // NewBatchTransaction is used to add a transaction to a batch
@@ -325,18 +351,26 @@ type NewBatchTransaction struct {
 	GovLevel     GovernanceLevel // Optional
 	IntentType   string          // Optional
 	IntentData   json.RawMessage // Optional
+	// RB-4 commitments. nil means unknown, `[]` means none declared — see migration 012.
+	DeclaredEffects json.RawMessage
+
+	// Intent Tracking (for Firestore linking)
+	UserID   *string // Optional - user who submitted the intent
+	IntentID *string // Optional - Firestore intent document ID
 
 	// Intent Metadata (for Transaction Center integration)
-	UserID          string    // Firebase UID
-	IntentID        string    // Firestore intent document ID
-	FromChain       string    // Source chain
-	ToChain         string    // Destination chain
-	FromAddress     string    // Source address
-	ToAddress       string    // Destination address
-	Amount          string    // Amount as string
-	TokenSymbol     string    // Token symbol
-	AdiURL          string    // ADI URL
-	CreatedAtClient time.Time // Client-side creation timestamp
+	FromChain       *string    // Source chain (e.g., 'accumulate')
+	ToChain         *string    // Destination chain (e.g., 'ethereum')
+	FromAddress     *string    // Source address
+	ToAddress       *string    // Destination address
+	Amount          *string    // Amount as string (supports uint256)
+	TokenSymbol     *string    // Token symbol (e.g., 'ACME', 'ETH')
+	AdiURL          *string    // ADI URL for the account
+	CreatedAtClient *time.Time // Client-side creation timestamp
+
+	// Multi-Leg Support
+	LegID            *string // UUID of the specific leg (optional)
+	MultiLegIntentID *string // Parent intent ID for multi-leg grouping (optional)
 }
 
 // NewAnchorRecord is used to create a new anchor record
@@ -362,32 +396,39 @@ type NewAnchorRecord struct {
 
 // NewCertenAnchorProof is used to create a new proof
 type NewCertenAnchorProof struct {
-	BatchID          uuid.UUID
-	AnchorID         uuid.UUID
-	TransactionID    int64
-	AccumTxHash      string
-	AccountURL       string
-	MerkleRoot       []byte
-	MerkleInclusion  []MerklePathNode
-	AnchorChain      TargetChain
-	AnchorTxHash     string
+	ProofArtifactID   uuid.UUID // the proof_artifacts row this proof describes (uuid.Nil: none)
+	BatchID           uuid.UUID // uuid.Nil when the proof is not part of a known batch
+	AnchorID          uuid.UUID
+	TransactionID     int64
+	AccumTxHash       string
+	AccountURL        string
+	MerkleRoot        []byte
+	MerkleInclusion   []MerklePathNode
+	LeafHash          []byte
+	LeafIndex         int
+	AnchorChain       TargetChain
+	AnchorTxHash      string
 	AnchorBlockNumber int64
-	AnchorBlockHash  string
-	AccumStateProof  json.RawMessage
-	AccumBlockHeight int64
-	AccumBVN         string
-	GovProof         json.RawMessage
-	GovLevel         GovernanceLevel
-	ValidatorID      string
+	AnchorBlockHash   string
+	AccumStateProof   json.RawMessage
+	AccumBlockHeight  int64
+	AccumBVN          string
+	GovProof          json.RawMessage
+	GovLevel          GovernanceLevel
+	GovValid          bool
+	ValidatorID       string
 }
 
 // NewProofRequest is used to create a new proof request
 type NewProofRequest struct {
-	AccumTxHash string
-	AccountURL  string
-	RequestType RequestType
-	Priority    RequestPriority
-	RequesterID string
+	AccumTxHash     string
+	AccountURL      string
+	RequestType     RequestType
+	GovernanceLevel GovernanceLevel
+	Priority        RequestPriority
+	RequesterID     string
+	APIKeyID        uuid.UUID
+	CallbackURL     string
 }
 
 // ============================================================================
@@ -658,4 +699,16 @@ type IntentLegSummary struct {
 	Legs         []IntentLeg        `json:"legs"`
 	ChainGroups  []IntentChainGroup `json:"chain_groups"`
 	Dependencies []LegDependency    `json:"dependencies"`
+}
+
+// BatchPhase5Update is used to update Phase 5 consensus fields on anchor_batches
+type BatchPhase5Update struct {
+	BPTRoot              []byte     // Binary Prefix Tree root
+	GovernanceRoot       []byte     // Governance proof root
+	ProofDataIncluded    bool       // Whether proof data was included
+	AttestationCount     int        // Number of attestations collected
+	AggregatedSignature  []byte     // BLS aggregated signature
+	AggregatedPublicKey  []byte     // BLS aggregated public key
+	QuorumReached        bool       // Whether quorum threshold was met
+	ConsensusCompletedAt *time.Time // When consensus was completed
 }

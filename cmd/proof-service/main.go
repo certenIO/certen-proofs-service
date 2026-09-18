@@ -72,6 +72,16 @@ func main() {
 	} else {
 		logger.Printf("Database connected successfully")
 		defer dbClient.Close()
+		// The deploy applies the shared schema; this service only checks it. Running against a schema
+		// older than its SQL would fail request by request, so refuse to start instead.
+		verifyCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		err := dbClient.VerifySharedSchema(verifyCtx)
+		cancel()
+		if err != nil {
+			logger.Fatalf("Shared database schema verification failed: %v", err)
+		}
+		logger.Printf("Shared database schema verified through migration %s",
+			database.RequiredSchema[len(database.RequiredSchema)-1].Version)
 	}
 
 	// Create repositories
@@ -144,6 +154,14 @@ func main() {
 	mux.HandleFunc("/api/v1/user/", txCenterHandlers.HandleGetUserIntents)
 	mux.HandleFunc("/api/v1/audit/intents", txCenterHandlers.HandleSearchAuditTrail)
 
+	// Proof records the validators write beside each artifact: the Certen anchor proof, the proof's
+	// level record, its external results with their attestations, validator sets and proof requests.
+	recordHandlers := server.NewProofRecordHandlers(repos, logger)
+	mux.HandleFunc("/api/v1/certen-proofs/", recordHandlers.HandleGetCertenProof)
+	mux.HandleFunc("/api/v1/validator-sets/", recordHandlers.HandleGetValidatorSet)
+	mux.HandleFunc("/api/v1/proof-cycles/incomplete", recordHandlers.HandleGetIncompleteProofCycles)
+	mux.HandleFunc("/api/v1/proof-requests/", recordHandlers.HandleGetProofRequest)
+
 	// API v1 Proof Detail endpoints (with sub-paths)
 	mux.HandleFunc("/api/v1/proofs/", func(w http.ResponseWriter, r *http.Request) {
 		path := r.URL.Path
@@ -160,6 +178,12 @@ func main() {
 			proofHandlers.HandleGetProofGovernance(w, r)
 		case strings.HasSuffix(path, "/attestations"):
 			proofHandlers.HandleGetProofAttestations(w, r)
+		case strings.HasSuffix(path, "/certen"):
+			recordHandlers.HandleGetProofCertenProof(w, r)
+		case strings.HasSuffix(path, "/cycle"):
+			recordHandlers.HandleGetProofCycle(w, r)
+		case strings.HasSuffix(path, "/results"):
+			recordHandlers.HandleGetProofResults(w, r)
 		default:
 			proofHandlers.HandleGetProofByID(w, r)
 		}
