@@ -138,7 +138,7 @@ func (r *ProofArtifactRepository) GetProofByTxHash(ctx context.Context, txHash s
 
 	var proof ProofArtifact
 	var adiURL, fromChain, toChain, fromAddress, toAddress, amount, tokenSymbol sql.NullString
-	err := r.db.QueryRowContext(ctx, query, txHash).Scan(
+	err := r.db.QueryRowContext(ctx, query, TransactionHashKey(txHash)).Scan(
 		&proof.ProofID, &proof.ProofType, &proof.ProofVersion, &proof.AccumTxHash, &proof.AccountURL,
 		&proof.BatchID, &proof.BatchPosition, &proof.AnchorID, &proof.AnchorTxHash, &proof.AnchorBlockNumber, &proof.AnchorChain,
 		&proof.MerkleRoot, &proof.LeafHash, &proof.LeafIndex, &proof.GovLevel, &proof.ProofClass, &proof.ValidatorID,
@@ -296,7 +296,7 @@ func (r *ProofArtifactRepository) QueryProofs(ctx context.Context, filter *Proof
 
 	if filter.AccumTxHash != nil {
 		conditions = append(conditions, fmt.Sprintf("pa.accum_tx_hash = $%d", argIndex))
-		args = append(args, *filter.AccumTxHash)
+		args = append(args, TransactionHashKey(*filter.AccumTxHash))
 		argIndex++
 	}
 	if filter.AccountURL != nil {
@@ -964,7 +964,7 @@ func (r *ProofArtifactRepository) GetTransactionMetadata(ctx context.Context, ac
 			FROM batch_transactions
 			WHERE accumulate_tx_hash = $1
 			LIMIT 1`
-		args = []interface{}{accumTxHash}
+		args = []interface{}{TransactionHashKey(accumTxHash)}
 	}
 
 	var meta TransactionMetadata
@@ -1256,7 +1256,7 @@ func (r *ProofArtifactRepository) GetProofBundleByTxHash(ctx context.Context, tx
 		LIMIT 1`
 
 	var bundle ProofBundle
-	err := r.db.QueryRowContext(ctx, query, txHash).Scan(
+	err := r.db.QueryRowContext(ctx, query, TransactionHashKey(txHash)).Scan(
 		&bundle.BundleID, &bundle.ProofID, &bundle.BundleFormat, &bundle.BundleVersion,
 		&bundle.BundleData, &bundle.BundleHash, &bundle.BundleSizeBytes,
 		&bundle.IncludesChained, &bundle.IncludesGovernance, &bundle.IncludesMerkle, &bundle.IncludesAnchor,
