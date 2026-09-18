@@ -51,17 +51,20 @@ func (r *AttestationRepository) CreateAttestation(ctx context.Context, input *Ne
 		AttestedAt:         time.Now(),
 	}
 
+	// Determine signature validity: valid if we have both pubkey and signature to verify
+	sigValid := input.ValidatorPubkey != nil && len(input.ValidatorPubkey) > 0 && input.Signature != nil && len(input.Signature) > 0
+
 	query := `
 		INSERT INTO validator_attestations (
 			attestation_id, proof_id, validator_id, validator_pubkey,
-			signature, attested_merkle_root, attested_anchor_tx_hash, attested_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+			signature, attested_hash, anchor_tx_hash, signature_valid, attested_at
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 		RETURNING attestation_id, attested_at`
 
 	err := r.client.QueryRowContext(ctx, query,
 		attestation.AttestationID, attestation.ProofID, attestation.ValidatorID,
 		attestation.ValidatorPubkey, attestation.Signature, attestation.AttestedMerkleRoot,
-		attestation.AttestedAnchorTx, attestation.AttestedAt,
+		attestation.AttestedAnchorTx, sigValid, attestation.AttestedAt,
 	).Scan(&attestation.AttestationID, &attestation.AttestedAt)
 
 	if err != nil {
@@ -75,7 +78,7 @@ func (r *AttestationRepository) CreateAttestation(ctx context.Context, input *Ne
 func (r *AttestationRepository) GetAttestation(ctx context.Context, attestationID uuid.UUID) (*ValidatorAttestation, error) {
 	query := `
 		SELECT attestation_id, proof_id, validator_id, validator_pubkey,
-			signature, attested_merkle_root, attested_anchor_tx_hash, attested_at
+			signature, merkle_root, anchor_tx_hash, attested_at
 		FROM validator_attestations
 		WHERE attestation_id = $1`
 
@@ -101,7 +104,7 @@ func (r *AttestationRepository) GetAttestation(ctx context.Context, attestationI
 func (r *AttestationRepository) GetAttestationsByProof(ctx context.Context, proofID uuid.UUID) ([]*ValidatorAttestation, error) {
 	query := `
 		SELECT attestation_id, proof_id, validator_id, validator_pubkey,
-			signature, attested_merkle_root, attested_anchor_tx_hash, attested_at
+			signature, merkle_root, anchor_tx_hash, attested_at
 		FROM validator_attestations
 		WHERE proof_id = $1
 		ORDER BY attested_at ASC`
@@ -133,7 +136,7 @@ func (r *AttestationRepository) GetAttestationsByProof(ctx context.Context, proo
 func (r *AttestationRepository) GetAttestationsByValidator(ctx context.Context, validatorID string, limit int) ([]*ValidatorAttestation, error) {
 	query := `
 		SELECT attestation_id, proof_id, validator_id, validator_pubkey,
-			signature, attested_merkle_root, attested_anchor_tx_hash, attested_at
+			signature, merkle_root, anchor_tx_hash, attested_at
 		FROM validator_attestations
 		WHERE validator_id = $1
 		ORDER BY attested_at DESC
@@ -166,7 +169,7 @@ func (r *AttestationRepository) GetAttestationsByValidator(ctx context.Context, 
 func (r *AttestationRepository) GetAttestationByValidatorAndProof(ctx context.Context, validatorID string, proofID uuid.UUID) (*ValidatorAttestation, error) {
 	query := `
 		SELECT attestation_id, proof_id, validator_id, validator_pubkey,
-			signature, attested_merkle_root, attested_anchor_tx_hash, attested_at
+			signature, merkle_root, anchor_tx_hash, attested_at
 		FROM validator_attestations
 		WHERE validator_id = $1 AND proof_id = $2`
 
@@ -218,9 +221,9 @@ func (r *AttestationRepository) CountAttestationsByValidator(ctx context.Context
 func (r *AttestationRepository) GetAttestationsByMerkleRoot(ctx context.Context, merkleRoot []byte) ([]*ValidatorAttestation, error) {
 	query := `
 		SELECT attestation_id, proof_id, validator_id, validator_pubkey,
-			signature, attested_merkle_root, attested_anchor_tx_hash, attested_at
+			signature, merkle_root, anchor_tx_hash, attested_at
 		FROM validator_attestations
-		WHERE attested_merkle_root = $1
+		WHERE merkle_root = $1
 		ORDER BY attested_at ASC`
 
 	rows, err := r.client.QueryContext(ctx, query, merkleRoot)
@@ -250,7 +253,7 @@ func (r *AttestationRepository) GetAttestationsByMerkleRoot(ctx context.Context,
 func (r *AttestationRepository) GetRecentAttestations(ctx context.Context, limit int) ([]*ValidatorAttestation, error) {
 	query := `
 		SELECT attestation_id, proof_id, validator_id, validator_pubkey,
-			signature, attested_merkle_root, attested_anchor_tx_hash, attested_at
+			signature, merkle_root, anchor_tx_hash, attested_at
 		FROM validator_attestations
 		ORDER BY attested_at DESC
 		LIMIT $1`
@@ -311,4 +314,66 @@ func (r *AttestationRepository) GetDistinctValidators(ctx context.Context) ([]st
 	}
 
 	return validators, rows.Err()
+}
+
+// ============================================================================
+// ATTESTATION VERIFICATION OPERATIONS
+// ============================================================================
+
+// MarkVerified updates the signature verification status of an attestation
+func (r *AttestationRepository) MarkVerified(ctx context.Context, attestationID uuid.UUID, valid bool) error {
+	query := `
+		UPDATE validator_attestations
+		SET signature_valid = $2, verified_at = NOW()
+		WHERE attestation_id = $1`
+
+	result, err := r.client.ExecContext(ctx, query, attestationID, valid)
+	if err != nil {
+		return fmt.Errorf("failed to mark attestation verified: %w", err)
+	}
+
+	rows, _ := result.RowsAffected()
+	if rows == 0 {
+		return fmt.Errorf("attestation not found: %s", attestationID)
+	}
+
+	return nil
+}
+
+// MarkVerifiedByProofAndValidator updates verification status for attestation by proof and validator
+func (r *AttestationRepository) MarkVerifiedByProofAndValidator(ctx context.Context, proofID uuid.UUID, validatorID string, valid bool) error {
+	query := `
+		UPDATE validator_attestations
+		SET signature_valid = $3, verified_at = NOW()
+		WHERE proof_id = $1 AND validator_id = $2`
+
+	result, err := r.client.ExecContext(ctx, query, proofID, validatorID, valid)
+	if err != nil {
+		return fmt.Errorf("failed to mark attestation verified: %w", err)
+	}
+
+	rows, _ := result.RowsAffected()
+	if rows == 0 {
+		return fmt.Errorf("attestation not found for proof %s and validator %s", proofID, validatorID)
+	}
+
+	return nil
+}
+
+// CountVerifiedAttestationsForProof counts verified attestations for a proof
+func (r *AttestationRepository) CountVerifiedAttestationsForProof(ctx context.Context, proofID uuid.UUID) (int, int, error) {
+	query := `
+		SELECT
+			COUNT(*) FILTER (WHERE signature_valid = TRUE) as valid_count,
+			COUNT(*) FILTER (WHERE signature_valid = FALSE) as invalid_count
+		FROM validator_attestations
+		WHERE proof_id = $1 AND signature_valid IS NOT NULL`
+
+	var validCount, invalidCount int
+	err := r.client.QueryRowContext(ctx, query, proofID).Scan(&validCount, &invalidCount)
+	if err != nil {
+		return 0, 0, fmt.Errorf("failed to count verified attestations: %w", err)
+	}
+
+	return validCount, invalidCount, nil
 }

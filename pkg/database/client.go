@@ -140,6 +140,14 @@ func (c *Client) DB() *sql.DB {
 	return c.db
 }
 
+// NewClientFromDB wraps an open database handle, for tests and tools that manage their own connection.
+func NewClientFromDB(db *sql.DB) *Client {
+	return &Client{
+		db:     db,
+		logger: log.New(log.Writer(), "[Database] ", log.LstdFlags),
+	}
+}
+
 // RequiredSchema is the shared catalog this service's SQL was proven against: each version with the exact
 // SHA-256 of its file in certen-validator db/migrations. The schema-prepare test prepares every statement
 // in this service against a database migrated to exactly this point, so raise it only together with a
@@ -149,6 +157,7 @@ var RequiredSchema = []SchemaVersion{
 	{"00001", "ed6ddda58c77649769ecff8ca5bbc555ab36e93118106339155b48c1443028c6"},
 	{"00002", "866449e035d3abb02d988dcfccbebc9d5f78f70f4e959772fe3721306d15b84f"},
 	{"00003", "a503d870c7cdb51b41842a6411b41571946c26d62b193577a884968861787f42"},
+	{"00004", "9390982904822660f722ed9d92559f2aa16d65c5c08f69296d602922b60b075d"},
 }
 
 // SchemaVersion is one applied migration of the shared catalog.

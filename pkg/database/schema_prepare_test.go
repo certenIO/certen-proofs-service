@@ -45,9 +45,14 @@ type serviceSQL struct {
 	SQL    string
 }
 
+// serviceSQLStatements collects every complete SQL statement in the service's non-test Go files: a string
+// literal, or a concatenation of string literals and package-level string constants (a shared column
+// list) folded into the text the database receives. A concatenation with a runtime operand cannot be
+// folded; its literal fragments are still checked on their own.
 func serviceSQLStatements(root string) ([]serviceSQL, error) {
 	seen := make(map[string]serviceSQL)
 	fileSet := token.NewFileSet()
+	packages := map[string][]*ast.File{}
 	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -73,26 +78,48 @@ func serviceSQLStatements(root string) ([]serviceSQL, error) {
 		if err != nil {
 			return fmt.Errorf("parse %s: %w", path, err)
 		}
-		ast.Inspect(file, func(node ast.Node) bool {
-			literal, ok := node.(*ast.BasicLit)
-			if !ok || literal.Kind != token.STRING {
-				return true
-			}
-			value, err := strconv.Unquote(literal.Value)
-			if err != nil || !looksLikeSQL(value) {
-				return true
-			}
-			if _, exists := seen[value]; !exists {
-				position := fileSet.Position(literal.Pos())
-				source, _ := filepath.Rel(root, position.Filename)
-				seen[value] = serviceSQL{Source: fmt.Sprintf("%s:%d", filepath.ToSlash(source), position.Line), SQL: value}
-			}
-			return true
-		})
+		packages[filepath.Dir(path)] = append(packages[filepath.Dir(path)], file)
 		return nil
 	})
 	if err != nil {
 		return nil, err
+	}
+	record := func(value string, pos token.Pos) {
+		if _, exists := seen[value]; exists {
+			return
+		}
+		position := fileSet.Position(pos)
+		source, _ := filepath.Rel(root, position.Filename)
+		seen[value] = serviceSQL{Source: fmt.Sprintf("%s:%d", filepath.ToSlash(source), position.Line), SQL: value}
+	}
+	for _, files := range packages {
+		constants := stringConstants(files)
+		for _, file := range files {
+			ast.Inspect(file, func(node ast.Node) bool {
+				switch n := node.(type) {
+				case *ast.BinaryExpr:
+					if n.Op != token.ADD {
+						return true
+					}
+					folded, ok := foldString(n, constants)
+					if !ok {
+						return true
+					}
+					if looksLikeSQL(folded) {
+						record(folded, n.Pos())
+					}
+					return false
+				case *ast.BasicLit:
+					if n.Kind != token.STRING {
+						return true
+					}
+					if value, err := strconv.Unquote(n.Value); err == nil && looksLikeSQL(value) {
+						record(value, n.Pos())
+					}
+				}
+				return true
+			})
+		}
 	}
 	result := make([]serviceSQL, 0, len(seen))
 	for _, statement := range seen {
@@ -100,6 +127,68 @@ func serviceSQLStatements(root string) ([]serviceSQL, error) {
 	}
 	sort.Slice(result, func(i, j int) bool { return result[i].Source < result[j].Source })
 	return result, nil
+}
+
+// stringConstants returns the package-level string constants of one package, folding constants defined
+// in terms of other constants.
+func stringConstants(files []*ast.File) map[string]string {
+	pending := map[string]ast.Expr{}
+	for _, file := range files {
+		for _, decl := range file.Decls {
+			gen, ok := decl.(*ast.GenDecl)
+			if !ok || gen.Tok != token.CONST {
+				continue
+			}
+			for _, spec := range gen.Specs {
+				value := spec.(*ast.ValueSpec)
+				for i, name := range value.Names {
+					if i < len(value.Values) {
+						pending[name.Name] = value.Values[i]
+					}
+				}
+			}
+		}
+	}
+	constants := map[string]string{}
+	for progress := true; progress; {
+		progress = false
+		for name, expr := range pending {
+			if folded, ok := foldString(expr, constants); ok {
+				constants[name] = folded
+				delete(pending, name)
+				progress = true
+			}
+		}
+	}
+	return constants
+}
+
+// foldString evaluates a concatenation of string literals and known string constants.
+func foldString(expr ast.Expr, constants map[string]string) (string, bool) {
+	switch e := expr.(type) {
+	case *ast.BasicLit:
+		if e.Kind != token.STRING {
+			return "", false
+		}
+		value, err := strconv.Unquote(e.Value)
+		return value, err == nil
+	case *ast.Ident:
+		value, ok := constants[e.Name]
+		return value, ok
+	case *ast.ParenExpr:
+		return foldString(e.X, constants)
+	case *ast.BinaryExpr:
+		if e.Op != token.ADD {
+			return "", false
+		}
+		left, ok := foldString(e.X, constants)
+		if !ok {
+			return "", false
+		}
+		right, ok := foldString(e.Y, constants)
+		return left + right, ok
+	}
+	return "", false
 }
 
 // looksLikeSQL accepts complete statements only. A literal containing a format verb is a template whose
