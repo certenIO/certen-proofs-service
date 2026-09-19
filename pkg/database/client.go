@@ -158,6 +158,7 @@ var RequiredSchema = []SchemaVersion{
 	{"00002", "866449e035d3abb02d988dcfccbebc9d5f78f70f4e959772fe3721306d15b84f"},
 	{"00003", "a503d870c7cdb51b41842a6411b41571946c26d62b193577a884968861787f42"},
 	{"00004", "9390982904822660f722ed9d92559f2aa16d65c5c08f69296d602922b60b075d"},
+	{"00005", "9c1db5f90d9db35b7193b53acd2a439f70557b37aa503ae5e40a8a52a7d5f37e"},
 }
 
 // SchemaVersion is one applied migration of the shared catalog.

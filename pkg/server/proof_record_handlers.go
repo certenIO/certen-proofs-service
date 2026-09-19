@@ -36,10 +36,12 @@ func NewProofRecordHandlers(repos *database.Repositories, logger *log.Logger) *P
 	return &ProofRecordHandlers{repos: repos, logger: logger, api: &ProofHandlers{repos: repos, logger: logger}}
 }
 
-// CertenProofView is a stored Certen proof and whether its hash still covers its content.
+// CertenProofView is a stored Certen proof, whether its hash still covers its content, and every correction
+// made to it after it was published (each keeps the proof as it was).
 type CertenProofView struct {
 	*database.CertenAnchorProof
-	ProofHashVerified bool `json:"proof_hash_verified"`
+	ProofHashVerified bool                          `json:"proof_hash_verified"`
+	Corrections       []database.EvidenceCorrection `json:"corrections"`
 }
 
 // ResultView is one external chain result with the attestations over it.
@@ -93,7 +95,7 @@ func (h *ProofRecordHandlers) fail(w http.ResponseWriter, what string, err error
 	h.api.writeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", fmt.Sprintf("Failed to retrieve %s", what))
 }
 
-func (h *ProofRecordHandlers) writeCertenProof(w http.ResponseWriter, proof *database.CertenAnchorProof, err error) {
+func (h *ProofRecordHandlers) writeCertenProof(ctx context.Context, w http.ResponseWriter, proof *database.CertenAnchorProof, err error) {
 	if errors.Is(err, database.ErrProofNotFound) {
 		h.api.writeError(w, http.StatusNotFound, "CERTEN_PROOF_NOT_FOUND", "No Certen proof found")
 		return
@@ -102,7 +104,12 @@ func (h *ProofRecordHandlers) writeCertenProof(w http.ResponseWriter, proof *dat
 		h.fail(w, "Certen proof", err)
 		return
 	}
-	h.api.writeJSON(w, http.StatusOK, CertenProofView{CertenAnchorProof: proof, ProofHashVerified: proof.VerifyProofHash()})
+	corrections, err := h.repos.Proofs.GetCorrections(ctx, database.CorrectionRecordCertenProof, proof.ProofID.String())
+	if err != nil {
+		h.fail(w, "Certen proof corrections", err)
+		return
+	}
+	h.api.writeJSON(w, http.StatusOK, CertenProofView{CertenAnchorProof: proof, ProofHashVerified: proof.VerifyProofHash(), Corrections: corrections})
 }
 
 // HandleGetProofCertenProof handles GET /api/v1/proofs/{proof_id}/certen
@@ -117,7 +124,7 @@ func (h *ProofRecordHandlers) HandleGetProofCertenProof(w http.ResponseWriter, r
 		return
 	}
 	proof, err := h.repos.Proofs.GetProofByArtifactID(ctx, proofID)
-	h.writeCertenProof(w, proof, err)
+	h.writeCertenProof(ctx, w, proof, err)
 }
 
 // HandleGetCertenProof handles GET /api/v1/certen-proofs/{id} and /api/v1/certen-proofs/tx/{accum_tx_hash}
@@ -129,7 +136,7 @@ func (h *ProofRecordHandlers) HandleGetCertenProof(w http.ResponseWriter, r *htt
 	defer cancel()
 	if txHash := pathParam(r, "/api/v1/certen-proofs/tx/"); txHash != "" {
 		proof, err := h.repos.Proofs.GetProofByAccumTxHash(ctx, txHash)
-		h.writeCertenProof(w, proof, err)
+		h.writeCertenProof(ctx, w, proof, err)
 		return
 	}
 	id, ok := h.parseUUID(w, pathParam(r, "/api/v1/certen-proofs/"), "Certen proof ID")
@@ -137,7 +144,7 @@ func (h *ProofRecordHandlers) HandleGetCertenProof(w http.ResponseWriter, r *htt
 		return
 	}
 	proof, err := h.repos.Proofs.GetProof(ctx, id)
-	h.writeCertenProof(w, proof, err)
+	h.writeCertenProof(ctx, w, proof, err)
 }
 
 // HandleGetProofCycle handles GET /api/v1/proofs/{proof_id}/cycle
