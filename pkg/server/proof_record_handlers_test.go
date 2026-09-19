@@ -138,6 +138,25 @@ func TestProofRecordEndpoints(t *testing.T) {
 	if code != http.StatusOK {
 		t.Fatalf("certen by tx: %d", code)
 	}
+	if string(body["corrections"]) != "[]" {
+		t.Fatalf("an uncorrected proof lists corrections: %s", body["corrections"])
+	}
+	// A corrected proof carries its correction, which keeps the proof as it was published.
+	if _, err := db.ExecContext(ctx, `
+		INSERT INTO evidence_corrections (record_type, record_id, reason, previous, corrected, chain_evidence, corrected_by)
+		VALUES ('certen_anchor_proof', $1, 'test', '{"proof_hash":"00"}', '{"proof_hash":"11"}', '{}', 'api-test')`,
+		certen.ProofID.String()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = db.ExecContext(context.Background(), `DELETE FROM evidence_corrections WHERE record_id = $1`, certen.ProofID.String())
+	})
+	code, body = get(h.HandleGetCertenProof, "/api/v1/certen-proofs/"+certen.ProofID.String())
+	var corrections []database.EvidenceCorrection
+	if err := json.Unmarshal(body["corrections"], &corrections); code != http.StatusOK || err != nil || len(corrections) != 1 ||
+		string(corrections[0].Previous) != `{"proof_hash":"00"}` {
+		t.Fatalf("corrections: %d %s %v", code, body["corrections"], err)
+	}
 	code, body = get(h.HandleGetProofCycle, "/api/v1/proofs/"+artifact.ProofID.String()+"/cycle")
 	if code != http.StatusOK || field(body, "level1_complete") != "true" || field(body, "all_levels_complete") != "false" {
 		t.Fatalf("proof cycle: %d %v", code, body)

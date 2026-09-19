@@ -727,3 +727,31 @@ func TestBatchTransactionsWithoutProofsAreReadable(t *testing.T) {
 		t.Fatalf("GetTransaction = %+v, %v", byID, err)
 	}
 }
+
+// A withdrawn layer is kept as the record of a claim that was made; it is not served as one that stands.
+func TestWithdrawnLayersAreNotServed(t *testing.T) {
+	requireTestDB(t)
+	ctx := context.Background()
+	artifact := newTestArtifact(t, ctx)
+	repo := NewProofArtifactRepository(testDB)
+	t.Cleanup(func() {
+		_, _ = testDB.ExecContext(context.Background(), `UPDATE chained_proof_layers SET superseded_by = NULL WHERE proof_id = $1`, artifact.ProofID)
+		_, _ = testDB.ExecContext(context.Background(), `DELETE FROM chained_proof_layers WHERE proof_id = $1`, artifact.ProofID)
+	})
+	withdrawn, err := repo.CreateChainedProofLayer(ctx, &NewChainedProofLayer{ProofID: artifact.ProofID, LayerNumber: 5, LayerName: "L5 - External Anchor", LayerJSON: json.RawMessage(`{"blockNumber":47002149}`)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	standing, err := repo.CreateChainedProofLayer(ctx, &NewChainedProofLayer{ProofID: artifact.ProofID, LayerNumber: 5, LayerName: "L5 - External Anchor", LayerJSON: json.RawMessage(`{"blockNumber":47002138}`)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := testDB.ExecContext(ctx, `UPDATE chained_proof_layers SET superseded_at = NOW(), superseded_reason = 'test', superseded_by = $2 WHERE layer_id = $1`,
+		withdrawn.LayerID, standing.LayerID); err != nil {
+		t.Fatal(err)
+	}
+	layers, err := repo.GetChainedProofLayers(ctx, artifact.ProofID)
+	if err != nil || len(layers) != 1 || layers[0].LayerID != standing.LayerID {
+		t.Fatalf("served %d layers, want only the standing one: %v", len(layers), err)
+	}
+}

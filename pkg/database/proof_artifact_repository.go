@@ -534,6 +534,9 @@ func (r *ProofArtifactRepository) GetChainedProofLayers(ctx context.Context, pro
 			   COALESCE(layer_json, '{}'::jsonb) as layer_json, verified, verified_at, created_at
 		FROM chained_proof_layers
 		WHERE proof_id = $1
+		  -- A withdrawn layer (migrations 019/020, or corrected by the validator's anchor repair, 00005) is
+		  -- kept as the record of a claim that was made, not served as one that stands.
+		  AND superseded_at IS NULL
 		ORDER BY layer_number`
 
 	rows, err := r.db.QueryContext(ctx, query, proofID)
