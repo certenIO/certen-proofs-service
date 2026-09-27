@@ -84,7 +84,7 @@ func (r *ProofArtifactRepository) CreateProofArtifact(ctx context.Context, input
 func (r *ProofArtifactRepository) GetProofByID(ctx context.Context, proofID uuid.UUID) (*ProofArtifact, error) {
 	query := `
 		SELECT pa.proof_id, pa.proof_type, pa.proof_version, pa.accum_tx_hash, pa.account_url,
-			   pa.batch_id, pa.batch_position, pa.anchor_id, pa.anchor_tx_hash, pa.anchor_block_number, pa.anchor_chain,
+			   pa.batch_id, pa.batch_position, pa.anchor_id, pa.anchor_tx_hash, pa.anchor_block_number, pa.anchor_chain, pa.settlement_tx_hash, pa.settlement_block_number,
 			   pa.merkle_root, pa.leaf_hash, pa.leaf_index, pa.gov_level, pa.proof_class, pa.validator_id,
 			   pa.status, pa.verification_status, pa.created_at, pa.anchored_at, pa.verified_at,
 			   COALESCE(pa.artifact_json, '{}'::jsonb) as artifact_json, pa.artifact_hash,
@@ -97,7 +97,7 @@ func (r *ProofArtifactRepository) GetProofByID(ctx context.Context, proofID uuid
 	var adiURL, fromChain, toChain, fromAddress, toAddress, amount, tokenSymbol sql.NullString
 	err := r.db.QueryRowContext(ctx, query, proofID).Scan(
 		&proof.ProofID, &proof.ProofType, &proof.ProofVersion, &proof.AccumTxHash, &proof.AccountURL,
-		&proof.BatchID, &proof.BatchPosition, &proof.AnchorID, &proof.AnchorTxHash, &proof.AnchorBlockNumber, &proof.AnchorChain,
+		&proof.BatchID, &proof.BatchPosition, &proof.AnchorID, &proof.AnchorTxHash, &proof.AnchorBlockNumber, &proof.AnchorChain, &proof.SettlementTxHash, &proof.SettlementBlockNumber,
 		&proof.MerkleRoot, &proof.LeafHash, &proof.LeafIndex, &proof.GovLevel, &proof.ProofClass, &proof.ValidatorID,
 		&proof.Status, &proof.VerificationStatus, &proof.CreatedAt, &proof.AnchoredAt, &proof.VerifiedAt,
 		&proof.ArtifactJSON, &proof.ArtifactHash,
@@ -127,7 +127,7 @@ func (r *ProofArtifactRepository) GetProofByID(ctx context.Context, proofID uuid
 func (r *ProofArtifactRepository) GetProofByTxHash(ctx context.Context, txHash string) (*ProofArtifact, error) {
 	query := `
 		SELECT pa.proof_id, pa.proof_type, pa.proof_version, pa.accum_tx_hash, pa.account_url,
-			   pa.batch_id, pa.batch_position, pa.anchor_id, pa.anchor_tx_hash, pa.anchor_block_number, pa.anchor_chain,
+			   pa.batch_id, pa.batch_position, pa.anchor_id, pa.anchor_tx_hash, pa.anchor_block_number, pa.anchor_chain, pa.settlement_tx_hash, pa.settlement_block_number,
 			   pa.merkle_root, pa.leaf_hash, pa.leaf_index, pa.gov_level, pa.proof_class, pa.validator_id,
 			   pa.status, pa.verification_status, pa.created_at, pa.anchored_at, pa.verified_at,
 			   COALESCE(pa.artifact_json, '{}'::jsonb) as artifact_json, pa.artifact_hash,
@@ -140,7 +140,7 @@ func (r *ProofArtifactRepository) GetProofByTxHash(ctx context.Context, txHash s
 	var adiURL, fromChain, toChain, fromAddress, toAddress, amount, tokenSymbol sql.NullString
 	err := r.db.QueryRowContext(ctx, query, TransactionHashKey(txHash)).Scan(
 		&proof.ProofID, &proof.ProofType, &proof.ProofVersion, &proof.AccumTxHash, &proof.AccountURL,
-		&proof.BatchID, &proof.BatchPosition, &proof.AnchorID, &proof.AnchorTxHash, &proof.AnchorBlockNumber, &proof.AnchorChain,
+		&proof.BatchID, &proof.BatchPosition, &proof.AnchorID, &proof.AnchorTxHash, &proof.AnchorBlockNumber, &proof.AnchorChain, &proof.SettlementTxHash, &proof.SettlementBlockNumber,
 		&proof.MerkleRoot, &proof.LeafHash, &proof.LeafIndex, &proof.GovLevel, &proof.ProofClass, &proof.ValidatorID,
 		&proof.Status, &proof.VerificationStatus, &proof.CreatedAt, &proof.AnchoredAt, &proof.VerifiedAt,
 		&proof.ArtifactJSON, &proof.ArtifactHash,
@@ -210,7 +210,7 @@ func (r *ProofArtifactRepository) GetProofsByAccount(ctx context.Context, accoun
 func (r *ProofArtifactRepository) GetProofsByBatch(ctx context.Context, batchID uuid.UUID) ([]ProofArtifact, error) {
 	query := `
 		SELECT proof_id, proof_type, proof_version, accum_tx_hash, account_url,
-			   batch_id, batch_position, anchor_id, anchor_tx_hash, anchor_block_number, anchor_chain,
+			   batch_id, batch_position, anchor_id, anchor_tx_hash, anchor_block_number, anchor_chain, settlement_tx_hash, settlement_block_number,
 			   merkle_root, leaf_hash, leaf_index, gov_level, proof_class, validator_id,
 			   status, verification_status, created_at, anchored_at, verified_at,
 			   COALESCE(artifact_json, '{}'::jsonb) as artifact_json, artifact_hash
@@ -229,7 +229,7 @@ func (r *ProofArtifactRepository) GetProofsByBatch(ctx context.Context, batchID 
 		var p ProofArtifact
 		if err := rows.Scan(
 			&p.ProofID, &p.ProofType, &p.ProofVersion, &p.AccumTxHash, &p.AccountURL,
-			&p.BatchID, &p.BatchPosition, &p.AnchorID, &p.AnchorTxHash, &p.AnchorBlockNumber, &p.AnchorChain,
+			&p.BatchID, &p.BatchPosition, &p.AnchorID, &p.AnchorTxHash, &p.AnchorBlockNumber, &p.AnchorChain, &p.SettlementTxHash, &p.SettlementBlockNumber,
 			&p.MerkleRoot, &p.LeafHash, &p.LeafIndex, &p.GovLevel, &p.ProofClass, &p.ValidatorID,
 			&p.Status, &p.VerificationStatus, &p.CreatedAt, &p.AnchoredAt, &p.VerifiedAt,
 			&p.ArtifactJSON, &p.ArtifactHash,
@@ -246,7 +246,7 @@ func (r *ProofArtifactRepository) GetProofsByBatch(ctx context.Context, batchID 
 func (r *ProofArtifactRepository) GetProofsByAnchorTx(ctx context.Context, anchorTxHash string) ([]ProofArtifact, error) {
 	query := `
 		SELECT pa.proof_id, pa.proof_type, pa.proof_version, pa.accum_tx_hash, pa.account_url,
-			   pa.batch_id, pa.batch_position, pa.anchor_id, pa.anchor_tx_hash, pa.anchor_block_number, pa.anchor_chain,
+			   pa.batch_id, pa.batch_position, pa.anchor_id, pa.anchor_tx_hash, pa.anchor_block_number, pa.anchor_chain, pa.settlement_tx_hash, pa.settlement_block_number,
 			   pa.merkle_root, pa.leaf_hash, pa.leaf_index, pa.gov_level, pa.proof_class, pa.validator_id,
 			   pa.status, pa.verification_status, pa.created_at, pa.anchored_at, pa.verified_at,
 			   COALESCE(pa.artifact_json, '{}'::jsonb) as artifact_json, pa.artifact_hash
@@ -265,7 +265,7 @@ func (r *ProofArtifactRepository) GetProofsByAnchorTx(ctx context.Context, ancho
 		var p ProofArtifact
 		if err := rows.Scan(
 			&p.ProofID, &p.ProofType, &p.ProofVersion, &p.AccumTxHash, &p.AccountURL,
-			&p.BatchID, &p.BatchPosition, &p.AnchorID, &p.AnchorTxHash, &p.AnchorBlockNumber, &p.AnchorChain,
+			&p.BatchID, &p.BatchPosition, &p.AnchorID, &p.AnchorTxHash, &p.AnchorBlockNumber, &p.AnchorChain, &p.SettlementTxHash, &p.SettlementBlockNumber,
 			&p.MerkleRoot, &p.LeafHash, &p.LeafIndex, &p.GovLevel, &p.ProofClass, &p.ValidatorID,
 			&p.Status, &p.VerificationStatus, &p.CreatedAt, &p.AnchoredAt, &p.VerifiedAt,
 			&p.ArtifactJSON, &p.ArtifactHash,
@@ -708,7 +708,7 @@ func (r *ProofArtifactRepository) CreateProofAttestation(ctx context.Context, in
 func (r *ProofArtifactRepository) GetProofAttestationsByProof(ctx context.Context, proofID uuid.UUID) ([]ProofAttestation, error) {
 	query := `
 		SELECT attestation_id, proof_id, batch_id, validator_id, validator_pubkey,
-			   attested_hash, signature, anchor_tx_hash, merkle_root, block_number,
+			   attested_hash, signature, anchor_tx_hash, merkle_root, block_number, settlement_tx_hash, settlement_block_number,
 			   signature_valid, verified_at, attested_at, created_at
 		FROM validator_attestations
 		WHERE proof_id = $1
@@ -725,7 +725,7 @@ func (r *ProofArtifactRepository) GetProofAttestationsByProof(ctx context.Contex
 		var a ProofAttestation
 		if err := rows.Scan(
 			&a.AttestationID, &a.ProofArtifactID, &a.BatchID, &a.ValidatorID, &a.ValidatorPubkey,
-			&a.AttestedHash, &a.Signature, &a.AnchorTxHash, &a.MerkleRoot, &a.BlockNumber,
+			&a.AttestedHash, &a.Signature, &a.AnchorTxHash, &a.MerkleRoot, &a.BlockNumber, &a.SettlementTxHash, &a.SettlementBlockNumber,
 			&a.SignatureValid, &a.VerifiedAt, &a.AttestedAt, &a.CreatedAt,
 		); err != nil {
 			return nil, fmt.Errorf("failed to scan attestation: %w", err)
@@ -747,7 +747,7 @@ func (r *ProofArtifactRepository) GetProofAttestationsByProofs(ctx context.Conte
 
 	query := `
 		SELECT attestation_id, proof_id, batch_id, validator_id, validator_pubkey,
-			   attested_hash, signature, anchor_tx_hash, merkle_root, block_number,
+			   attested_hash, signature, anchor_tx_hash, merkle_root, block_number, settlement_tx_hash, settlement_block_number,
 			   signature_valid, verified_at, attested_at, created_at
 		FROM validator_attestations
 		WHERE proof_id = ANY($1)
@@ -763,7 +763,7 @@ func (r *ProofArtifactRepository) GetProofAttestationsByProofs(ctx context.Conte
 		var a ProofAttestation
 		if err := rows.Scan(
 			&a.AttestationID, &a.ProofArtifactID, &a.BatchID, &a.ValidatorID, &a.ValidatorPubkey,
-			&a.AttestedHash, &a.Signature, &a.AnchorTxHash, &a.MerkleRoot, &a.BlockNumber,
+			&a.AttestedHash, &a.Signature, &a.AnchorTxHash, &a.MerkleRoot, &a.BlockNumber, &a.SettlementTxHash, &a.SettlementBlockNumber,
 			&a.SignatureValid, &a.VerifiedAt, &a.AttestedAt, &a.CreatedAt,
 		); err != nil {
 			return nil, fmt.Errorf("failed to scan attestation: %w", err)
@@ -780,7 +780,7 @@ func (r *ProofArtifactRepository) GetProofAttestationsByProofs(ctx context.Conte
 func (r *ProofArtifactRepository) GetProofAttestationsByBatch(ctx context.Context, batchID uuid.UUID) ([]ProofAttestation, error) {
 	query := `
 		SELECT attestation_id, proof_id, batch_id, validator_id, validator_pubkey,
-			   attested_hash, signature, anchor_tx_hash, merkle_root, block_number,
+			   attested_hash, signature, anchor_tx_hash, merkle_root, block_number, settlement_tx_hash, settlement_block_number,
 			   signature_valid, verified_at, attested_at, created_at
 		FROM validator_attestations
 		WHERE batch_id = $1
@@ -797,7 +797,7 @@ func (r *ProofArtifactRepository) GetProofAttestationsByBatch(ctx context.Contex
 		var a ProofAttestation
 		if err := rows.Scan(
 			&a.AttestationID, &a.ProofArtifactID, &a.BatchID, &a.ValidatorID, &a.ValidatorPubkey,
-			&a.AttestedHash, &a.Signature, &a.AnchorTxHash, &a.MerkleRoot, &a.BlockNumber,
+			&a.AttestedHash, &a.Signature, &a.AnchorTxHash, &a.MerkleRoot, &a.BlockNumber, &a.SettlementTxHash, &a.SettlementBlockNumber,
 			&a.SignatureValid, &a.VerifiedAt, &a.AttestedAt, &a.CreatedAt,
 		); err != nil {
 			return nil, fmt.Errorf("failed to scan attestation: %w", err)
@@ -1023,9 +1023,11 @@ func (r *ProofArtifactRepository) GetTransactionMetadata(ctx context.Context, ac
 func (r *ProofArtifactRepository) GetAnchorReference(ctx context.Context, proofID uuid.UUID) (*AnchorReferenceRecord, error) {
 	query := `
 		SELECT reference_id, proof_id, target_chain, chain_id, network_name,
-			   anchor_tx_hash, anchor_block_number, anchor_block_hash, anchor_timestamp,
+			   -- Empty where the proof's anchor is not established (validator migration 00011, RB3-F135).
+			   COALESCE(anchor_tx_hash, ''), COALESCE(anchor_block_number, 0), anchor_block_hash, anchor_timestamp,
 			   contract_address, confirmations, required_confirmations, is_confirmed, confirmed_at,
-			   gas_used, gas_price_wei, total_cost_wei, created_at
+			   gas_used, gas_price_wei, total_cost_wei, created_at,
+			   settlement_tx_hash, settlement_block_number, settlement_block_hash, settlement_timestamp, settlement_gas_used
 		FROM anchor_references
 		WHERE proof_id = $1`
 
@@ -1035,6 +1037,7 @@ func (r *ProofArtifactRepository) GetAnchorReference(ctx context.Context, proofI
 		&ref.AnchorTxHash, &ref.AnchorBlockNumber, &ref.AnchorBlockHash, &ref.AnchorTimestamp,
 		&ref.ContractAddress, &ref.Confirmations, &ref.RequiredConfirmations, &ref.IsConfirmed, &ref.ConfirmedAt,
 		&ref.GasUsed, &ref.GasPriceWei, &ref.TotalCostWei, &ref.CreatedAt,
+		&ref.SettlementTxHash, &ref.SettlementBlockNumber, &ref.SettlementBlockHash, &ref.SettlementTimestamp, &ref.SettlementGasUsed,
 	)
 
 	if err == sql.ErrNoRows {
@@ -1059,7 +1062,7 @@ func (r *ProofArtifactRepository) GetProofsModifiedSince(ctx context.Context, si
 
 	query := `
 		SELECT proof_id, proof_type, proof_version, accum_tx_hash, account_url,
-			   batch_id, batch_position, anchor_id, anchor_tx_hash, anchor_block_number, anchor_chain,
+			   batch_id, batch_position, anchor_id, anchor_tx_hash, anchor_block_number, anchor_chain, settlement_tx_hash, settlement_block_number,
 			   merkle_root, leaf_hash, leaf_index, gov_level, proof_class, validator_id,
 			   status, verification_status, created_at, anchored_at, verified_at,
 			   COALESCE(artifact_json, '{}'::jsonb) as artifact_json, artifact_hash
@@ -1079,7 +1082,7 @@ func (r *ProofArtifactRepository) GetProofsModifiedSince(ctx context.Context, si
 		var p ProofArtifact
 		if err := rows.Scan(
 			&p.ProofID, &p.ProofType, &p.ProofVersion, &p.AccumTxHash, &p.AccountURL,
-			&p.BatchID, &p.BatchPosition, &p.AnchorID, &p.AnchorTxHash, &p.AnchorBlockNumber, &p.AnchorChain,
+			&p.BatchID, &p.BatchPosition, &p.AnchorID, &p.AnchorTxHash, &p.AnchorBlockNumber, &p.AnchorChain, &p.SettlementTxHash, &p.SettlementBlockNumber,
 			&p.MerkleRoot, &p.LeafHash, &p.LeafIndex, &p.GovLevel, &p.ProofClass, &p.ValidatorID,
 			&p.Status, &p.VerificationStatus, &p.CreatedAt, &p.AnchoredAt, &p.VerifiedAt,
 			&p.ArtifactJSON, &p.ArtifactHash,
@@ -1397,7 +1400,7 @@ func (r *ProofArtifactRepository) GetProofsForBulkExport(ctx context.Context, ac
 
 	query := fmt.Sprintf(`
 		SELECT pa.proof_id, pa.proof_type, pa.proof_version, pa.accum_tx_hash, pa.account_url,
-			   pa.batch_id, pa.batch_position, pa.anchor_id, pa.anchor_tx_hash, pa.anchor_block_number, pa.anchor_chain,
+			   pa.batch_id, pa.batch_position, pa.anchor_id, pa.anchor_tx_hash, pa.anchor_block_number, pa.anchor_chain, pa.settlement_tx_hash, pa.settlement_block_number,
 			   pa.merkle_root, pa.leaf_hash, pa.leaf_index, pa.gov_level, pa.proof_class, pa.validator_id,
 			   pa.status, pa.verification_status, pa.created_at, pa.anchored_at, pa.verified_at,
 			   COALESCE(pa.artifact_json, '{}'::jsonb) as artifact_json, pa.artifact_hash
@@ -1420,7 +1423,7 @@ func (r *ProofArtifactRepository) GetProofsForBulkExport(ctx context.Context, ac
 		var p ProofArtifact
 		if err := rows.Scan(
 			&p.ProofID, &p.ProofType, &p.ProofVersion, &p.AccumTxHash, &p.AccountURL,
-			&p.BatchID, &p.BatchPosition, &p.AnchorID, &p.AnchorTxHash, &p.AnchorBlockNumber, &p.AnchorChain,
+			&p.BatchID, &p.BatchPosition, &p.AnchorID, &p.AnchorTxHash, &p.AnchorBlockNumber, &p.AnchorChain, &p.SettlementTxHash, &p.SettlementBlockNumber,
 			&p.MerkleRoot, &p.LeafHash, &p.LeafIndex, &p.GovLevel, &p.ProofClass, &p.ValidatorID,
 			&p.Status, &p.VerificationStatus, &p.CreatedAt, &p.AnchoredAt, &p.VerifiedAt,
 			&p.ArtifactJSON, &p.ArtifactHash,
@@ -1825,7 +1828,7 @@ func (r *ProofArtifactRepository) QueryProofsForExport(ctx context.Context, filt
 
 	query := fmt.Sprintf(`
 		SELECT proof_id, proof_type, proof_version, accum_tx_hash, account_url,
-			   batch_id, batch_position, anchor_id, anchor_tx_hash, anchor_block_number, anchor_chain,
+			   batch_id, batch_position, anchor_id, anchor_tx_hash, anchor_block_number, anchor_chain, settlement_tx_hash, settlement_block_number,
 			   merkle_root, leaf_hash, leaf_index, gov_level, proof_class, validator_id,
 			   status, verification_status, created_at, anchored_at, verified_at,
 			   COALESCE(artifact_json, '{}'::jsonb) as artifact_json, artifact_hash
@@ -1847,7 +1850,7 @@ func (r *ProofArtifactRepository) QueryProofsForExport(ctx context.Context, filt
 		var p ProofArtifact
 		if err := rows.Scan(
 			&p.ProofID, &p.ProofType, &p.ProofVersion, &p.AccumTxHash, &p.AccountURL,
-			&p.BatchID, &p.BatchPosition, &p.AnchorID, &p.AnchorTxHash, &p.AnchorBlockNumber, &p.AnchorChain,
+			&p.BatchID, &p.BatchPosition, &p.AnchorID, &p.AnchorTxHash, &p.AnchorBlockNumber, &p.AnchorChain, &p.SettlementTxHash, &p.SettlementBlockNumber,
 			&p.MerkleRoot, &p.LeafHash, &p.LeafIndex, &p.GovLevel, &p.ProofClass, &p.ValidatorID,
 			&p.Status, &p.VerificationStatus, &p.CreatedAt, &p.AnchoredAt, &p.VerifiedAt,
 			&p.ArtifactJSON, &p.ArtifactHash,
@@ -2219,7 +2222,7 @@ func (r *ProofArtifactRepository) GetAllProofsByIntentID(ctx context.Context, in
 	query := `
 		SELECT pa.proof_id, pa.proof_type, pa.proof_version, pa.accum_tx_hash, pa.account_url,
 			   pa.batch_id, pa.batch_position, pa.anchor_id, pa.anchor_tx_hash,
-			   pa.anchor_block_number, pa.anchor_chain, pa.merkle_root, pa.leaf_hash, pa.leaf_index,
+			   pa.anchor_block_number, pa.anchor_chain, pa.settlement_tx_hash, pa.settlement_block_number, pa.merkle_root, pa.leaf_hash, pa.leaf_index,
 			   pa.gov_level, pa.proof_class, pa.validator_id, pa.status, pa.verification_status,
 			   pa.created_at, pa.anchored_at, pa.verified_at, pa.artifact_json, pa.artifact_hash,
 			   pa.intent_id, pa.leg_id, pa.multi_leg_intent_id,
@@ -2242,7 +2245,7 @@ func (r *ProofArtifactRepository) GetAllProofsByIntentID(ctx context.Context, in
 		if err := rows.Scan(
 			&p.ProofID, &p.ProofType, &p.ProofVersion, &p.AccumTxHash, &p.AccountURL,
 			&p.BatchID, &p.BatchPosition, &p.AnchorID, &p.AnchorTxHash,
-			&p.AnchorBlockNumber, &p.AnchorChain, &p.MerkleRoot, &p.LeafHash, &p.LeafIndex,
+			&p.AnchorBlockNumber, &p.AnchorChain, &p.SettlementTxHash, &p.SettlementBlockNumber, &p.MerkleRoot, &p.LeafHash, &p.LeafIndex,
 			&p.GovLevel, &p.ProofClass, &p.ValidatorID, &p.Status, &p.VerificationStatus,
 			&p.CreatedAt, &p.AnchoredAt, &p.VerifiedAt, &p.ArtifactJSON, &p.ArtifactHash,
 			&p.IntentID, &p.LegID, &p.MultiLegIntentID,
