@@ -22,9 +22,13 @@ export interface ProofArtifact {
   accum_tx_hash: string;
   account_url: string;
   batch_id?: string;
+  // Where the batch root was published; absent where the proof's anchor is not established.
   anchor_tx_hash?: string;
   anchor_chain?: string;
   anchor_block_number?: number;
+  // The member's settlement transaction - not the anchor (RB3-F135).
+  settlement_tx_hash?: string;
+  settlement_block_number?: number;
   gov_level?: GovernanceLevel;
   proof_class: ProofClass;
   status: ProofStatus;
@@ -89,9 +93,11 @@ export interface MerkleInclusionProof {
 
 export interface AnchorReference {
   target_chain: string;
-  anchor_tx_hash: string;
+  anchor_tx_hash: string; // empty where the anchor is not established
   anchor_block_number: number;
   confirmations: number;
+  settlement_tx_hash?: string;
+  settlement_block_number?: number;
 }
 
 export interface ProofLayer {

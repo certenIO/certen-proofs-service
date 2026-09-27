@@ -107,6 +107,23 @@ function ProofDetail() {
         '-'
       ),
     },
+    {
+      // The settlement is not the anchor: it is the member's own transaction, which spent the leaf the
+      // anchor published (RB3-F135).
+      label: 'Settlement TX',
+      value: p.settlement_tx_hash ? (
+        <HashDisplay
+          hash={p.settlement_tx_hash}
+          linkTo={
+            p.anchor_chain === 'ethereum'
+              ? `https://etherscan.io/tx/${p.settlement_tx_hash}`
+              : undefined
+          }
+        />
+      ) : (
+        '-'
+      ),
+    },
   ];
 
   return (

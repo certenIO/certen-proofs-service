@@ -78,6 +78,11 @@ type ProofArtifact struct {
 	AnchorBlockNumber *int64     `json:"anchor_block_number,omitempty" db:"anchor_block_number"`
 	AnchorChain       *string    `json:"anchor_chain,omitempty" db:"anchor_chain"`
 
+	// Settlement is the member's settlement transaction on the target chain - not where the root was
+	// published, which is AnchorTxHash (validator migration 00011, RB3-F135).
+	SettlementTxHash      *string `json:"settlement_tx_hash,omitempty" db:"settlement_tx_hash"`
+	SettlementBlockNumber *int64  `json:"settlement_block_number,omitempty" db:"settlement_block_number"`
+
 	// Merkle Inclusion
 	MerkleRoot []byte `json:"merkle_root,omitempty" db:"merkle_root"`
 	LeafHash   []byte `json:"leaf_hash,omitempty" db:"leaf_hash"`
@@ -302,9 +307,13 @@ type ProofAttestation struct {
 	Signature    []byte `json:"signature" db:"signature"`         // Ed25519 64 bytes
 
 	// Context
+	// AnchorTxHash/BlockNumber: where the batch root was published; nil where not established. The message
+	// the validators signed names the settlement: SettlementTxHash (validator migration 00011, RB3-F135).
 	AnchorTxHash *string `json:"anchor_tx_hash,omitempty" db:"anchor_tx_hash"`
 	MerkleRoot   []byte  `json:"merkle_root,omitempty" db:"merkle_root"`
 	BlockNumber  *int64  `json:"block_number,omitempty" db:"block_number"`
+	SettlementTxHash      *string `json:"settlement_tx_hash,omitempty" db:"settlement_tx_hash"`
+	SettlementBlockNumber *int64  `json:"settlement_block_number,omitempty" db:"settlement_block_number"`
 
 	// Verification
 	SignatureValid bool       `json:"signature_valid" db:"signature_valid"`
@@ -364,6 +373,14 @@ type AnchorReferenceRecord struct {
 	TotalCostWei *string `json:"total_cost_wei,omitempty" db:"total_cost_wei"`
 
 	CreatedAt time.Time `json:"created_at" db:"created_at"`
+
+	// The settlement the proof attests - not the anchor (validator migration 00011, RB3-F135). The anchor_*
+	// fields above are empty where the proof's anchor is not established.
+	SettlementTxHash      *string    `json:"settlement_tx_hash,omitempty" db:"settlement_tx_hash"`
+	SettlementBlockNumber *int64     `json:"settlement_block_number,omitempty" db:"settlement_block_number"`
+	SettlementBlockHash   *string    `json:"settlement_block_hash,omitempty" db:"settlement_block_hash"`
+	SettlementTimestamp   *time.Time `json:"settlement_timestamp,omitempty" db:"settlement_timestamp"`
+	SettlementGasUsed     *int64     `json:"settlement_gas_used,omitempty" db:"settlement_gas_used"`
 }
 
 // ============================================================================
