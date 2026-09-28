@@ -68,18 +68,16 @@ type AnchorBatchRecord struct {
 	ConfirmedAt *time.Time `json:"confirmed_at"`
 }
 
-const anchorBatchRecordByID = `
-		SELECT id, batch_type, status, lane, merkle_root, transaction_count, target_chain, chain_id, bundle_id,
-			batch_operation_id, validator_id,
+// anchorBatchRecordColumns is the column list every batch reader selects, in scanAnchorBatchRecord's order.
+const anchorBatchRecordColumns = `id, batch_type, status, lane, merkle_root, transaction_count, target_chain, chain_id,
+			bundle_id, batch_operation_id, validator_id,
 			anchor_create_tx, anchor_tx_hash, anchor_block_num, anchor_create_sender, verify_tx, verify_block,
 			verify_sender, gas_used,
 			message_hash, COALESCE(quorum_reached, FALSE), COALESCE(attestation_count, 0),
 			signed_voting_power::text, total_voting_power::text, signers, aggregated_signature,
 			aggregated_public_key, evidence_source, consensus_completed_at,
 			accumulate_block_height, accumulate_block_hash, bpt_root, governance_root, error_message,
-			created_at, updated_at, batch_start_time, batch_end_time, closed_at, anchored_at, confirmed_at
-		FROM anchor_batches
-		WHERE id = $1`
+			created_at, updated_at, batch_start_time, batch_end_time, closed_at, anchored_at, confirmed_at`
 
 func nullStringPtr(v sql.NullString) *string {
 	if !v.Valid {
@@ -110,10 +108,9 @@ func hexPtr(b []byte) *string {
 	return &s
 }
 
-// GetBatch reads one anchor batch as the validators wrote it; ErrBatchNotFound if there is none. It read 13 of
-// the row's columns into a type whose validator_id could not hold the NULL the quorum path writes, so it failed on
-// every batch the validators record.
-func (r *BatchRepository) GetBatch(ctx context.Context, batchID uuid.UUID) (*AnchorBatchRecord, error) {
+// scanAnchorBatchRecord scans one row selected with anchorBatchRecordColumns. A column the validators have not
+// written stays null. The scan's own error (sql.ErrNoRows included) is returned as is.
+func scanAnchorBatchRecord(scan func(...any) error) (*AnchorBatchRecord, error) {
 	var (
 		rec                                                                    AnchorBatchRecord
 		lane, bundleID, opID, validatorID, createTx, anchorTx, createSender    sql.NullString
@@ -123,7 +120,7 @@ func (r *BatchRepository) GetBatch(ctx context.Context, batchID uuid.UUID) (*Anc
 		merkleRoot, aggSig, aggPub, bptRoot, govRoot, signers                  []byte
 		consensusAt, startedAt, endedAt, closedAt, anchoredAt, confirmedAt     sql.NullTime
 	)
-	err := r.client.QueryRowContext(ctx, anchorBatchRecordByID, batchID).Scan(
+	if err := scan(
 		&rec.BatchID, &rec.BatchType, &rec.Status, &lane, &merkleRoot, &rec.TransactionCount, &rec.TargetChain,
 		&chainID, &bundleID, &opID, &validatorID,
 		&createTx, &anchorTx, &anchorBlock, &createSender, &verifyTx, &verifyBlock, &verifySender, &gasUsed,
@@ -131,12 +128,8 @@ func (r *BatchRepository) GetBatch(ctx context.Context, batchID uuid.UUID) (*Anc
 		&signedPower, &totalPower, &signers, &aggSig, &aggPub, &evidence, &consensusAt,
 		&accumHeight, &accumHash, &bptRoot, &govRoot, &errorMessage,
 		&rec.CreatedAt, &rec.UpdatedAt, &startedAt, &endedAt, &closedAt, &anchoredAt, &confirmedAt,
-	)
-	if err == sql.ErrNoRows {
-		return nil, ErrBatchNotFound
-	}
-	if err != nil {
-		return nil, fmt.Errorf("failed to read anchor batch %s: %w", batchID, err)
+	); err != nil {
+		return nil, err
 	}
 	rec.Lane, rec.BundleID, rec.BatchOperationID, rec.ValidatorID = nullStringPtr(lane), nullStringPtr(bundleID), nullStringPtr(opID), nullStringPtr(validatorID)
 	rec.AnchorCreateTx, rec.AnchorTxHash, rec.AnchorCreateSender = nullStringPtr(createTx), nullStringPtr(anchorTx), nullStringPtr(createSender)
@@ -156,4 +149,26 @@ func (r *BatchRepository) GetBatch(ctx context.Context, batchID uuid.UUID) (*Anc
 	rec.StartedAt, rec.EndedAt, rec.ClosedAt = nullTimePtr(startedAt), nullTimePtr(endedAt), nullTimePtr(closedAt)
 	rec.AnchoredAt, rec.ConfirmedAt = nullTimePtr(anchoredAt), nullTimePtr(confirmedAt)
 	return &rec, nil
+}
+
+// oneAnchorBatch reads the single row a query selects; ErrBatchNotFound if it selects none.
+func (r *BatchRepository) oneAnchorBatch(ctx context.Context, what, query string, args ...any) (*AnchorBatchRecord, error) {
+	rec, err := scanAnchorBatchRecord(r.client.QueryRowContext(ctx, query, args...).Scan)
+	if err == sql.ErrNoRows {
+		return nil, ErrBatchNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to read %s: %w", what, err)
+	}
+	return rec, nil
+}
+
+// GetBatch reads one anchor batch as the validators wrote it; ErrBatchNotFound if there is none. It read 13 of
+// the row's columns into a type whose validator_id could not hold the NULL the quorum path writes, so it failed on
+// every batch the validators record.
+func (r *BatchRepository) GetBatch(ctx context.Context, batchID uuid.UUID) (*AnchorBatchRecord, error) {
+	return r.oneAnchorBatch(ctx, "anchor batch "+batchID.String(), `
+		SELECT `+anchorBatchRecordColumns+`
+		FROM anchor_batches
+		WHERE id = $1`, batchID)
 }

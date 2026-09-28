@@ -34,6 +34,9 @@ var (
 	// ErrBatchNotFound is returned when a batch is not found
 	ErrBatchNotFound = errors.New("batch not found")
 
+	// ErrBatchNotPending is returned when a batch that must be open (pending) is not
+	ErrBatchNotPending = errors.New("batch is not pending")
+
 	// ErrTransactionNotFound is returned when a batch transaction is not found
 	ErrTransactionNotFound = errors.New("transaction not found")
 
