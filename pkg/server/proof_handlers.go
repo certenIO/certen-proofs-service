@@ -465,36 +465,10 @@ func (h *ProofHandlers) HandleVerifyProofIntegrity(w http.ResponseWriter, r *htt
 // BATCH STATISTICS ENDPOINTS
 // ============================================================================
 
-// HandleGetBatchStats handles GET /api/v1/batches/{batch_id}/stats
+// HandleGetBatchStats handles GET /api/v1/batches/{batch_id}/stats. It is served by the batch handlers, which name
+// a batch that does not exist as not found; this handler answered zero counts for any ID, and no route served it.
 func (h *ProofHandlers) HandleGetBatchStats(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		h.writeError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Only GET is allowed")
-		return
-	}
-
-	// Extract batch ID from path
-	path := strings.TrimPrefix(r.URL.Path, "/api/v1/batches/")
-	parts := strings.Split(path, "/")
-	if len(parts) < 2 || parts[1] != "stats" {
-		h.writeError(w, http.StatusBadRequest, "INVALID_PATH", "Invalid endpoint path")
-		return
-	}
-
-	batchID, err := uuid.Parse(parts[0])
-	if err != nil {
-		h.writeError(w, http.StatusBadRequest, "INVALID_BATCH_ID", "Invalid batch ID format")
-		return
-	}
-
-	ctx := r.Context()
-	stats, err := h.repos.ProofArtifacts.GetBatchProofStats(ctx, batchID)
-	if err != nil {
-		h.logger.Printf("Error getting batch stats: %v", err)
-		h.writeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to retrieve batch stats")
-		return
-	}
-
-	h.writeJSON(w, http.StatusOK, stats)
+	NewBatchHandlers(h.repos, h.logger).HandleBatches(w, r)
 }
 
 // ============================================================================
