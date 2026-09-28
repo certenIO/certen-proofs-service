@@ -23,7 +23,7 @@ const lifecycleColumns = `il.id, il.intent_id, il.accum_tx_hash, il.user_id, il.
 		il.created_at, il.updated_at, il.submitted_at, il.authorized_at,
 		il.in_process_at, il.completed_at, il.failed_at,
 		il.target_chains, il.leg_count, il.execution_mode, il.legs_completed, il.legs_failed,
-		il.member_chains, il.settling_at`
+		il.member_chains, il.settling_at, il.failure_class`
 
 // lifecycleDest is the scan destinations for lifecycleColumns.
 func lifecycleDest(lc *IntentLifecycle) []interface{} {
@@ -34,7 +34,7 @@ func lifecycleDest(lc *IntentLifecycle) []interface{} {
 		&lc.CreatedAt, &lc.UpdatedAt, &lc.SubmittedAt, &lc.AuthorizedAt,
 		&lc.InProcessAt, &lc.CompletedAt, &lc.FailedAt,
 		&lc.TargetChains, &lc.LegCount, &lc.ExecutionMode, &lc.LegsCompleted, &lc.LegsFailed,
-		&lc.MemberChains, &lc.SettlingAt,
+		&lc.MemberChains, &lc.SettlingAt, &lc.FailureClass,
 	}
 }
 

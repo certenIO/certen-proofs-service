@@ -40,6 +40,10 @@ type IntentLifecycle struct {
 	InProcessAt  *time.Time            `json:"in_process_at,omitempty"`
 	CompletedAt  *time.Time            `json:"completed_at,omitempty"`
 	FailedAt     *time.Time            `json:"failed_at,omitempty"`
+	// FailureClass is why a failed intent failed (RB4-F13, validator migration 00014): refused | not_entitled |
+	// governance_unsatisfied | governance_unavailable | settlement_failed | processing_failed. Null when it has not
+	// failed, or failed before the class was recorded.
+	FailureClass *string `json:"failure_class"`
 
 	// The rest of the row the validator writes (RB2-F6). These were not served, so a client could not see how many legs
 	// an intent has, its execution mode, how many settled or failed, or that it is settling.
