@@ -162,6 +162,10 @@ func main() {
 	mux.HandleFunc("/api/v1/proof-cycles/incomplete", recordHandlers.HandleGetIncompleteProofCycles)
 	mux.HandleFunc("/api/v1/proof-requests/", recordHandlers.HandleGetProofRequest)
 
+	// Anchor batches as the validators write them, with the counts of the proofs stored against each.
+	batchHandlers := server.NewBatchHandlers(repos, logger)
+	mux.HandleFunc("/api/v1/batches/", batchHandlers.HandleBatches)
+
 	// API v1 Proof Detail endpoints (with sub-paths)
 	mux.HandleFunc("/api/v1/proofs/", func(w http.ResponseWriter, r *http.Request) {
 		path := r.URL.Path
