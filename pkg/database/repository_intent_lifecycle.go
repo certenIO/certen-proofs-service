@@ -4,8 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-
-	"github.com/lib/pq"
 )
 
 // IntentLifecycleRepository handles read-only queries for intent lifecycle tracking
@@ -18,60 +16,101 @@ func NewIntentLifecycleRepository(client *Client) *IntentLifecycleRepository {
 	return &IntentLifecycleRepository{client: client}
 }
 
-// GetByIntentID retrieves a lifecycle record by intent ID
-func (r *IntentLifecycleRepository) GetByIntentID(ctx context.Context, intentID string) (*IntentLifecycle, error) {
-	query := `
-		SELECT id, intent_id, accum_tx_hash, user_id, status, target_chain, proof_class,
-		       error_message, block_height, cycle_id, write_back_tx,
-		       created_at, updated_at, submitted_at, authorized_at,
-		       in_process_at, completed_at, failed_at
-		FROM intent_lifecycle
-		WHERE intent_id = $1
-	`
+// lifecycleColumns is every intent_lifecycle column the service serves, in scanLifecycle's order.
+const lifecycleColumns = `il.id, il.intent_id, il.accum_tx_hash, il.user_id, il.status,
+		il.target_chain, il.proof_class, il.error_message, il.block_height,
+		il.cycle_id, il.write_back_tx,
+		il.created_at, il.updated_at, il.submitted_at, il.authorized_at,
+		il.in_process_at, il.completed_at, il.failed_at,
+		il.target_chains, il.leg_count, il.execution_mode, il.legs_completed, il.legs_failed,
+		il.member_chains, il.settling_at`
 
-	lc := &IntentLifecycle{}
-	err := r.client.QueryRowContext(ctx, query, intentID).Scan(
+// lifecycleDest is the scan destinations for lifecycleColumns.
+func lifecycleDest(lc *IntentLifecycle) []interface{} {
+	return []interface{}{
 		&lc.ID, &lc.IntentID, &lc.AccumTxHash, &lc.UserID, &lc.Status,
 		&lc.TargetChain, &lc.ProofClass, &lc.ErrorMessage, &lc.BlockHeight,
 		&lc.CycleID, &lc.WriteBackTx,
 		&lc.CreatedAt, &lc.UpdatedAt, &lc.SubmittedAt, &lc.AuthorizedAt,
 		&lc.InProcessAt, &lc.CompletedAt, &lc.FailedAt,
-	)
+		&lc.TargetChains, &lc.LegCount, &lc.ExecutionMode, &lc.LegsCompleted, &lc.LegsFailed,
+		&lc.MemberChains, &lc.SettlingAt,
+	}
+}
+
+// The single-intent reads, as complete statements (the schema test prepares every statement the service can run).
+const (
+	lifecycleByIntentID = `SELECT ` + lifecycleColumns + ` FROM intent_lifecycle il WHERE il.intent_id = $1`
+	lifecycleByTxHash   = `SELECT ` + lifecycleColumns + ` FROM intent_lifecycle il WHERE il.accum_tx_hash = $1`
+)
+
+// getOne reads one lifecycle row and its members.
+func (r *IntentLifecycleRepository) getOne(ctx context.Context, query string, arg interface{}) (*IntentLifecycle, error) {
+	lc := &IntentLifecycle{}
+	err := r.client.QueryRowContext(ctx, query, arg).Scan(lifecycleDest(lc)...)
 	if err == sql.ErrNoRows {
 		return nil, ErrIntentLifecycleNotFound
 	}
 	if err != nil {
-		return nil, fmt.Errorf("get intent lifecycle by id: %w", err)
+		return nil, fmt.Errorf("get intent lifecycle: %w", err)
 	}
+	members, err := r.members(ctx, lc)
+	if err != nil {
+		return nil, err
+	}
+	lc.Members = members
 	return lc, nil
 }
 
-// GetByTxHash retrieves a lifecycle record by Accumulate transaction hash
-func (r *IntentLifecycleRepository) GetByTxHash(ctx context.Context, txHash string) (*IntentLifecycle, error) {
-	query := `
-		SELECT id, intent_id, accum_tx_hash, user_id, status, target_chain, proof_class,
-		       error_message, block_height, cycle_id, write_back_tx,
-		       created_at, updated_at, submitted_at, authorized_at,
-		       in_process_at, completed_at, failed_at
-		FROM intent_lifecycle
-		WHERE accum_tx_hash = $1
-	`
-
-	lc := &IntentLifecycle{}
-	err := r.client.QueryRowContext(ctx, query, TransactionHashKey(txHash)).Scan(
-		&lc.ID, &lc.IntentID, &lc.AccumTxHash, &lc.UserID, &lc.Status,
-		&lc.TargetChain, &lc.ProofClass, &lc.ErrorMessage, &lc.BlockHeight,
-		&lc.CycleID, &lc.WriteBackTx,
-		&lc.CreatedAt, &lc.UpdatedAt, &lc.SubmittedAt, &lc.AuthorizedAt,
-		&lc.InProcessAt, &lc.CompletedAt, &lc.FailedAt,
-	)
-	if err == sql.ErrNoRows {
-		return nil, ErrIntentLifecycleNotFound
-	}
+// members is every chain member of the intent: each chain in member_chains with its outcome, or Recorded false when the
+// validator has recorded none yet, plus any recorded outcome for a chain member_chains does not list.
+func (r *IntentLifecycleRepository) members(ctx context.Context, lc *IntentLifecycle) ([]IntentMemberOutcome, error) {
+	rows, err := r.client.QueryContext(ctx, `
+		SELECT chain_id, settlement, proof_cycle, legs, settlement_tx, write_back_tx, cycle_id, reason, recorded_at
+		FROM intent_member_outcomes WHERE intent_id = $1 ORDER BY chain_id`, lc.IntentID)
 	if err != nil {
-		return nil, fmt.Errorf("get intent lifecycle by tx hash: %w", err)
+		return nil, fmt.Errorf("query intent member outcomes: %w", err)
 	}
-	return lc, nil
+	defer rows.Close()
+	recorded := map[int64]IntentMemberOutcome{}
+	var order []int64
+	for rows.Next() {
+		m := IntentMemberOutcome{Recorded: true}
+		if err := rows.Scan(&m.ChainID, &m.Settlement, &m.ProofCycle, &m.Legs, &m.SettlementTx, &m.WriteBackTx, &m.CycleID, &m.Reason, &m.RecordedAt); err != nil {
+			return nil, fmt.Errorf("scan intent member outcome: %w", err)
+		}
+		recorded[m.ChainID] = m
+		order = append(order, m.ChainID)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate intent member outcomes: %w", err)
+	}
+	var out []IntentMemberOutcome
+	seen := map[int64]bool{}
+	for _, c := range lc.MemberChains {
+		if m, ok := recorded[c]; ok {
+			out = append(out, m)
+		} else {
+			out = append(out, IntentMemberOutcome{ChainID: c, Recorded: false})
+		}
+		seen[c] = true
+	}
+	for _, c := range order {
+		if !seen[c] {
+			out = append(out, recorded[c])
+		}
+	}
+	return out, nil
+}
+
+// GetByIntentID retrieves a lifecycle record, with its members, by intent ID.
+func (r *IntentLifecycleRepository) GetByIntentID(ctx context.Context, intentID string) (*IntentLifecycle, error) {
+	return r.getOne(ctx, lifecycleByIntentID, intentID)
+}
+
+// GetByTxHash retrieves a lifecycle record, with its members, by Accumulate transaction hash.
+func (r *IntentLifecycleRepository) GetByTxHash(ctx context.Context, txHash string) (*IntentLifecycle, error) {
+	return r.getOne(ctx, lifecycleByTxHash, TransactionHashKey(txHash))
 }
 
 // ListRecentEnriched returns recent lifecycle records joined with batch_transactions
@@ -85,22 +124,11 @@ func (r *IntentLifecycleRepository) ListRecentEnriched(ctx context.Context, limi
 
 	query := `
 		SELECT DISTINCT ON (il.intent_id)
-		       il.id, il.intent_id, il.accum_tx_hash, il.user_id, il.status,
-		       il.target_chain, il.proof_class, il.error_message, il.block_height,
-		       il.cycle_id, il.write_back_tx,
-		       il.created_at, il.updated_at, il.submitted_at, il.authorized_at,
-		       il.in_process_at, il.completed_at, il.failed_at,
+		       ` + lifecycleColumns + `,
 		       bt.from_chain, bt.to_chain, bt.from_address, bt.to_address,
-		       bt.amount, bt.token_symbol, bt.account_url,
-		       COALESCE(bt_agg.leg_count, 0), bt_agg.all_chains
+		       bt.amount, bt.token_symbol, bt.account_url
 		FROM intent_lifecycle il
 		LEFT JOIN batch_transactions bt ON bt.intent_id = il.intent_id
-		LEFT JOIN LATERAL (
-		    SELECT COUNT(DISTINCT bt2.to_chain) AS leg_count,
-		           ARRAY_AGG(DISTINCT bt2.to_chain) FILTER (WHERE bt2.to_chain IS NOT NULL) AS all_chains
-		    FROM batch_transactions bt2
-		    WHERE bt2.intent_id = il.intent_id
-		) bt_agg ON TRUE
 		ORDER BY il.intent_id, bt.id ASC NULLS LAST
 	`
 
@@ -120,22 +148,11 @@ func (r *IntentLifecycleRepository) ListByUserEnriched(ctx context.Context, user
 
 	query := `
 		SELECT DISTINCT ON (il.intent_id)
-		       il.id, il.intent_id, il.accum_tx_hash, il.user_id, il.status,
-		       il.target_chain, il.proof_class, il.error_message, il.block_height,
-		       il.cycle_id, il.write_back_tx,
-		       il.created_at, il.updated_at, il.submitted_at, il.authorized_at,
-		       il.in_process_at, il.completed_at, il.failed_at,
+		       ` + lifecycleColumns + `,
 		       bt.from_chain, bt.to_chain, bt.from_address, bt.to_address,
-		       bt.amount, bt.token_symbol, bt.account_url,
-		       COALESCE(bt_agg.leg_count, 0), bt_agg.all_chains
+		       bt.amount, bt.token_symbol, bt.account_url
 		FROM intent_lifecycle il
 		LEFT JOIN batch_transactions bt ON bt.intent_id = il.intent_id
-		LEFT JOIN LATERAL (
-		    SELECT COUNT(DISTINCT bt2.to_chain) AS leg_count,
-		           ARRAY_AGG(DISTINCT bt2.to_chain) FILTER (WHERE bt2.to_chain IS NOT NULL) AS all_chains
-		    FROM batch_transactions bt2
-		    WHERE bt2.intent_id = il.intent_id
-		) bt_agg ON TRUE
 		WHERE il.user_id = $1
 		ORDER BY il.intent_id, bt.id ASC NULLS LAST
 	`
@@ -155,22 +172,11 @@ func (r *IntentLifecycleRepository) ListByStatus(ctx context.Context, status Int
 
 	query := `
 		SELECT DISTINCT ON (il.intent_id)
-		       il.id, il.intent_id, il.accum_tx_hash, il.user_id, il.status,
-		       il.target_chain, il.proof_class, il.error_message, il.block_height,
-		       il.cycle_id, il.write_back_tx,
-		       il.created_at, il.updated_at, il.submitted_at, il.authorized_at,
-		       il.in_process_at, il.completed_at, il.failed_at,
+		       ` + lifecycleColumns + `,
 		       bt.from_chain, bt.to_chain, bt.from_address, bt.to_address,
-		       bt.amount, bt.token_symbol, bt.account_url,
-		       COALESCE(bt_agg.leg_count, 0), bt_agg.all_chains
+		       bt.amount, bt.token_symbol, bt.account_url
 		FROM intent_lifecycle il
 		LEFT JOIN batch_transactions bt ON bt.intent_id = il.intent_id
-		LEFT JOIN LATERAL (
-		    SELECT COUNT(DISTINCT bt2.to_chain) AS leg_count,
-		           ARRAY_AGG(DISTINCT bt2.to_chain) FILTER (WHERE bt2.to_chain IS NOT NULL) AS all_chains
-		    FROM batch_transactions bt2
-		    WHERE bt2.intent_id = il.intent_id
-		) bt_agg ON TRUE
 		WHERE il.status = $1
 		ORDER BY il.intent_id, bt.id ASC NULLS LAST
 	`
@@ -190,16 +196,10 @@ func (r *IntentLifecycleRepository) scanEnrichedRows(ctx context.Context, query 
 	var results []*IntentLifecycleEnriched
 	for rows.Next() {
 		e := &IntentLifecycleEnriched{}
-		if err := rows.Scan(
-			&e.ID, &e.IntentID, &e.AccumTxHash, &e.UserID, &e.Status,
-			&e.TargetChain, &e.ProofClass, &e.ErrorMessage, &e.BlockHeight,
-			&e.CycleID, &e.WriteBackTx,
-			&e.CreatedAt, &e.UpdatedAt, &e.SubmittedAt, &e.AuthorizedAt,
-			&e.InProcessAt, &e.CompletedAt, &e.FailedAt,
+		dest := append(lifecycleDest(&e.IntentLifecycle),
 			&e.FromChain, &e.ToChain, &e.FromAddress, &e.ToAddress,
-			&e.Amount, &e.TokenSymbol, &e.AccountURL,
-			&e.LegCount, pq.Array(&e.AllChains),
-		); err != nil {
+			&e.Amount, &e.TokenSymbol, &e.AccountURL)
+		if err := rows.Scan(dest...); err != nil {
 			return nil, fmt.Errorf("scan enriched intent lifecycle row: %w", err)
 		}
 		results = append(results, e)
