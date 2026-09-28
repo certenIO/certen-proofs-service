@@ -28,206 +28,162 @@ func NewBatchRepository(client *Client) *BatchRepository {
 // ANCHOR BATCH OPERATIONS
 // ============================================================================
 
-// CreateBatch creates a new anchor batch
-func (r *BatchRepository) CreateBatch(ctx context.Context, input *NewAnchorBatch) (*AnchorBatch, error) {
-	targetChain := input.TargetChain
-	if targetChain == "" {
-		targetChain = "ethereum"
+// CreateBatch opens an anchor batch for a validator on a chain and returns it as recorded. Both are required: it
+// anchored a batch with no chain to "ethereum", and wrote an all-zero merkle root that read as a real root until
+// the batch closed — the root is now null until CloseBatch writes it.
+func (r *BatchRepository) CreateBatch(ctx context.Context, input *NewAnchorBatch) (*AnchorBatchRecord, error) {
+	if input == nil || input.TargetChain == "" {
+		return nil, fmt.Errorf("create batch: a target chain is required")
 	}
-
-	batch := &AnchorBatch{
-		BatchID:     uuid.New(),
-		BatchType:   input.BatchType,
-		MerkleRoot:  make([]byte, 32), // Empty initially, filled when batch is closed
-		TxCount:     0,
-		StartTime:   time.Now(),
-		ValidatorID: input.ValidatorID,
-		Status:      BatchStatusPending,
-		CreatedAt:   time.Now(),
-		UpdatedAt:   time.Now(),
+	if input.ValidatorID == "" {
+		return nil, fmt.Errorf("create batch: a validator is required")
 	}
-
-	query := `
+	if input.BatchType != BatchTypeOnCadence && input.BatchType != BatchTypeOnDemand {
+		return nil, fmt.Errorf("create batch: batch type %q is neither %q nor %q", input.BatchType, BatchTypeOnCadence, BatchTypeOnDemand)
+	}
+	return r.oneAnchorBatch(ctx, "created anchor batch", `
 		INSERT INTO anchor_batches (
-			id, batch_type, merkle_root, transaction_count,
-			batch_start_time, validator_id, status, target_chain, created_at, updated_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-		RETURNING id, created_at, updated_at`
-
-	err := r.client.QueryRowContext(ctx, query,
-		batch.BatchID, batch.BatchType, batch.MerkleRoot, batch.TxCount,
-		batch.StartTime, batch.ValidatorID, batch.Status, targetChain, batch.CreatedAt, batch.UpdatedAt,
-	).Scan(&batch.BatchID, &batch.CreatedAt, &batch.UpdatedAt)
-
-	if err != nil {
-		return nil, fmt.Errorf("failed to create batch: %w", err)
-	}
-
-	return batch, nil
+			id, batch_type, transaction_count, tx_count, batch_start_time, validator_id, status, target_chain
+		) VALUES ($1, $2, 0, 0, NOW(), $3, 'pending', $4)
+		RETURNING `+anchorBatchRecordColumns,
+		uuid.New(), input.BatchType, input.ValidatorID, input.TargetChain)
 }
 
-// GetBatchByMerkleRoot retrieves a batch by its merkle root
-func (r *BatchRepository) GetBatchByMerkleRoot(ctx context.Context, merkleRoot []byte) (*AnchorBatch, error) {
-	query := `
-		SELECT id, batch_type, merkle_root, transaction_count,
-			batch_start_time, batch_end_time, accumulate_block_height,
-			accumulate_block_hash, validator_id, status, error_message,
-			created_at, updated_at
+// GetBatchByMerkleRoot reads the newest anchor batch with this merkle root; ErrBatchNotFound if there is none.
+func (r *BatchRepository) GetBatchByMerkleRoot(ctx context.Context, merkleRoot []byte) (*AnchorBatchRecord, error) {
+	return r.oneAnchorBatch(ctx, "anchor batch by merkle root", `
+		SELECT `+anchorBatchRecordColumns+`
 		FROM anchor_batches
 		WHERE merkle_root = $1
 		ORDER BY created_at DESC
-		LIMIT 1`
-
-	batch := &AnchorBatch{}
-	err := r.client.QueryRowContext(ctx, query, merkleRoot).Scan(
-		&batch.BatchID, &batch.BatchType, &batch.MerkleRoot, &batch.TxCount,
-		&batch.StartTime, &batch.EndTime, &batch.AccumHeight,
-		&batch.AccumHash, &batch.ValidatorID, &batch.Status, &batch.ErrorMessage,
-		&batch.CreatedAt, &batch.UpdatedAt,
-	)
-
-	if err == sql.ErrNoRows {
-		return nil, ErrBatchNotFound
-	}
-	if err != nil {
-		return nil, fmt.Errorf("failed to get batch by merkle root: %w", err)
-	}
-
-	return batch, nil
+		LIMIT 1`, merkleRoot)
 }
 
-// GetPendingBatch returns the current open batch for the validator (if any)
-func (r *BatchRepository) GetPendingBatch(ctx context.Context, validatorID string, batchType BatchType) (*AnchorBatch, error) {
-	query := `
-		SELECT id, batch_type, merkle_root, transaction_count,
-			batch_start_time, batch_end_time, accumulate_block_height,
-			accumulate_block_hash, validator_id, status, error_message,
-			created_at, updated_at
+// GetPendingBatch reads the validator's newest open batch of a type; ErrBatchNotFound if it has none.
+func (r *BatchRepository) GetPendingBatch(ctx context.Context, validatorID string, batchType BatchType) (*AnchorBatchRecord, error) {
+	return r.oneAnchorBatch(ctx, "pending anchor batch", `
+		SELECT `+anchorBatchRecordColumns+`
 		FROM anchor_batches
 		WHERE validator_id = $1 AND batch_type = $2 AND status = 'pending'
 		ORDER BY created_at DESC
-		LIMIT 1`
-
-	batch := &AnchorBatch{}
-	err := r.client.QueryRowContext(ctx, query, validatorID, batchType).Scan(
-		&batch.BatchID, &batch.BatchType, &batch.MerkleRoot, &batch.TxCount,
-		&batch.StartTime, &batch.EndTime, &batch.AccumHeight,
-		&batch.AccumHash, &batch.ValidatorID, &batch.Status, &batch.ErrorMessage,
-		&batch.CreatedAt, &batch.UpdatedAt,
-	)
-
-	if err == sql.ErrNoRows {
-		// F.4 remediation: Return explicit error instead of nil, nil
-		return nil, ErrBatchNotFound
-	}
-	if err != nil {
-		return nil, fmt.Errorf("failed to get pending batch: %w", err)
-	}
-
-	return batch, nil
+		LIMIT 1`, validatorID, batchType)
 }
 
-// GetBatchesReadyForAnchoring returns batches that are closed and ready to be anchored
-func (r *BatchRepository) GetBatchesReadyForAnchoring(ctx context.Context) ([]*AnchorBatch, error) {
-	query := `
-		SELECT id, batch_type, merkle_root, transaction_count,
-			batch_start_time, batch_end_time, accumulate_block_height,
-			accumulate_block_hash, validator_id, status, error_message,
-			created_at, updated_at
+// GetBatchesReadyForAnchoring returns the closed batches, oldest first.
+func (r *BatchRepository) GetBatchesReadyForAnchoring(ctx context.Context) ([]*AnchorBatchRecord, error) {
+	rows, err := r.client.QueryContext(ctx, `
+		SELECT `+anchorBatchRecordColumns+`
 		FROM anchor_batches
 		WHERE status = 'closed'
-		ORDER BY created_at ASC`
-
-	rows, err := r.client.QueryContext(ctx, query)
+		ORDER BY created_at ASC`)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query batches: %w", err)
 	}
 	defer rows.Close()
 
-	var batches []*AnchorBatch
+	var batches []*AnchorBatchRecord
 	for rows.Next() {
-		batch := &AnchorBatch{}
-		err := rows.Scan(
-			&batch.BatchID, &batch.BatchType, &batch.MerkleRoot, &batch.TxCount,
-			&batch.StartTime, &batch.EndTime, &batch.AccumHeight,
-			&batch.AccumHash, &batch.ValidatorID, &batch.Status, &batch.ErrorMessage,
-			&batch.CreatedAt, &batch.UpdatedAt,
-		)
+		batch, err := scanAnchorBatchRecord(rows.Scan)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan batch: %w", err)
 		}
 		batches = append(batches, batch)
 	}
-
 	return batches, rows.Err()
 }
 
-// CloseBatch closes a batch with the computed merkle root
+// requireBatch tells a batch that does not exist (ErrBatchNotFound) from one an update did not match.
+func (r *BatchRepository) requireBatch(ctx context.Context, batchID uuid.UUID) error {
+	var exists bool
+	if err := r.client.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM anchor_batches WHERE id = $1)`, batchID).Scan(&exists); err != nil {
+		return fmt.Errorf("failed to look up batch %s: %w", batchID, err)
+	}
+	if !exists {
+		return fmt.Errorf("batch %s: %w", batchID, ErrBatchNotFound)
+	}
+	return nil
+}
+
+// affectedOne checks that an update to one batch changed it; a batch that does not exist is ErrBatchNotFound.
+func (r *BatchRepository) affectedOne(ctx context.Context, batchID uuid.UUID, what string, result sql.Result) error {
+	n, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("%s: reading the rows changed: %w", what, err)
+	}
+	if n == 0 {
+		if err := r.requireBatch(ctx, batchID); err != nil {
+			return fmt.Errorf("%s: %w", what, err)
+		}
+		return fmt.Errorf("%s: batch %s exists but was not changed", what, batchID)
+	}
+	return nil
+}
+
+// CloseBatch closes a pending batch with its computed 32-byte merkle root and the Accumulate block it closed at.
+// A batch that is not pending is ErrBatchNotPending; one that does not exist is ErrBatchNotFound (both were one
+// unnamed error).
 func (r *BatchRepository) CloseBatch(ctx context.Context, batchID uuid.UUID, merkleRoot []byte, accumHeight int64, accumHash string) error {
-	query := `
+	if len(merkleRoot) != 32 {
+		return fmt.Errorf("close batch %s: the merkle root is %d bytes, not 32", batchID, len(merkleRoot))
+	}
+	result, err := r.client.ExecContext(ctx, `
 		UPDATE anchor_batches
 		SET status = 'closed',
 			merkle_root = $2,
-			batch_end_time = $3,
-			accumulate_block_height = $4,
-			accumulate_block_hash = $5,
-			updated_at = $6
-		WHERE id = $1 AND status = 'pending'`
-
-	result, err := r.client.ExecContext(ctx, query,
-		batchID, merkleRoot, time.Now(), accumHeight, accumHash, time.Now())
+			batch_end_time = NOW(),
+			closed_at = NOW(),
+			accumulate_block_height = $3,
+			accumulate_block_hash = NULLIF($4, ''),
+			updated_at = NOW()
+		WHERE id = $1 AND status = 'pending'`,
+		batchID, merkleRoot, accumHeight, accumHash)
 	if err != nil {
 		return fmt.Errorf("failed to close batch: %w", err)
 	}
-
-	rows, _ := result.RowsAffected()
-	if rows == 0 {
-		return fmt.Errorf("batch not found or not in pending status")
+	n, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("close batch %s: reading the rows changed: %w", batchID, err)
 	}
-
+	if n == 0 {
+		if err := r.requireBatch(ctx, batchID); err != nil {
+			return fmt.Errorf("close batch: %w", err)
+		}
+		return fmt.Errorf("close batch %s: %w", batchID, ErrBatchNotPending)
+	}
 	return nil
 }
 
-// UpdateBatchStatus updates the batch status
+// UpdateBatchStatus moves a batch to a status and records when it was closed, anchored and confirmed (the first
+// time each happened; they were never recorded). An error message, when given, is recorded; an empty one leaves
+// the recorded one in place.
 func (r *BatchRepository) UpdateBatchStatus(ctx context.Context, batchID uuid.UUID, status BatchStatus, errorMsg string) error {
-	var query string
-	var args []interface{}
-
-	if errorMsg != "" {
-		query = `
-			UPDATE anchor_batches
-			SET status = $2, error_message = $3, updated_at = $4
-			WHERE id = $1`
-		args = []interface{}{batchID, status, errorMsg, time.Now()}
-	} else {
-		query = `
-			UPDATE anchor_batches
-			SET status = $2, updated_at = $3
-			WHERE id = $1`
-		args = []interface{}{batchID, status, time.Now()}
-	}
-
-	_, err := r.client.ExecContext(ctx, query, args...)
+	result, err := r.client.ExecContext(ctx, `
+		UPDATE anchor_batches
+		SET status = $2::varchar,
+			error_message = COALESCE(NULLIF($3::text, ''), error_message),
+			closed_at = CASE WHEN $2::varchar IN ('closed', 'anchoring', 'anchored', 'confirmed') THEN COALESCE(closed_at, NOW()) ELSE closed_at END,
+			anchored_at = CASE WHEN $2::varchar IN ('anchored', 'confirmed') THEN COALESCE(anchored_at, NOW()) ELSE anchored_at END,
+			confirmed_at = CASE WHEN $2::varchar = 'confirmed' THEN COALESCE(confirmed_at, NOW()) ELSE confirmed_at END,
+			updated_at = NOW()
+		WHERE id = $1`,
+		batchID, string(status), errorMsg)
 	if err != nil {
 		return fmt.Errorf("failed to update batch status: %w", err)
 	}
-
-	return nil
+	return r.affectedOne(ctx, batchID, "update batch status", result)
 }
 
-// IncrementTxCount increments the transaction count for a batch
+// IncrementTxCount counts one more transaction in a batch. The table carries the count twice (transaction_count
+// and tx_count, which the quorum path writes equal); this incremented only the first, so the two diverged.
 func (r *BatchRepository) IncrementTxCount(ctx context.Context, batchID uuid.UUID) error {
-	query := `
+	result, err := r.client.ExecContext(ctx, `
 		UPDATE anchor_batches
-		SET transaction_count = transaction_count + 1, updated_at = $2
-		WHERE id = $1`
-
-	_, err := r.client.ExecContext(ctx, query, batchID, time.Now())
+		SET transaction_count = transaction_count + 1, tx_count = tx_count + 1, updated_at = NOW()
+		WHERE id = $1`, batchID)
 	if err != nil {
 		return fmt.Errorf("failed to increment tx count: %w", err)
 	}
-
-	return nil
+	return r.affectedOne(ctx, batchID, "increment tx count", result)
 }
 
 // UpdateBatchPhase5 updates the Phase 5 consensus fields after quorum is reached
@@ -259,13 +215,7 @@ func (r *BatchRepository) UpdateBatchPhase5(ctx context.Context, batchID uuid.UU
 	if err != nil {
 		return fmt.Errorf("failed to update batch Phase 5 fields: %w", err)
 	}
-
-	rows, _ := result.RowsAffected()
-	if rows == 0 {
-		return fmt.Errorf("batch not found: %s", batchID)
-	}
-
-	return nil
+	return r.affectedOne(ctx, batchID, "update batch Phase 5 fields", result)
 }
 
 // ============================================================================
@@ -611,7 +561,7 @@ func (r *BatchRepository) GetTransactionHashesByBatchID(ctx context.Context, bat
 
 // nullableJSON keeps the difference between "unknown" and "nothing was declared".
 //
-// A nil json.RawMessage handed to lib/pq becomes an empty STRING, which jsonb rejects — and a
+// A nil json.RawMessage handed to lib/pq becomes an empty STRING, which jsonb rejects â€” and a
 // well-meaning fix is to substitute `[]`, which silently turns "we never found out" into "the intent
 // committed to nothing". Those are different claims and migration 012 exists to keep them apart, so
 // nil becomes a real SQL NULL here and nowhere else decides.
