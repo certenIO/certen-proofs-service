@@ -66,8 +66,12 @@ func (r *IntentLifecycleRepository) getOne(ctx context.Context, query string, ar
 // validator has recorded none yet, plus any recorded outcome for a chain member_chains does not list.
 func (r *IntentLifecycleRepository) members(ctx context.Context, lc *IntentLifecycle) ([]IntentMemberOutcome, error) {
 	rows, err := r.client.QueryContext(ctx, `
-		SELECT chain_id, settlement, proof_cycle, legs, settlement_tx, write_back_tx, cycle_id, reason, recorded_at
-		FROM intent_member_outcomes WHERE intent_id = $1 ORDER BY chain_id`, lc.IntentID)
+		SELECT m.chain_id, m.settlement, m.proof_cycle, m.legs, m.settlement_tx, m.write_back_tx, m.cycle_id, m.reason, m.recorded_at,
+		       m.effects_proven,
+		       (SELECT p.proof_id::text FROM proof_artifacts p
+		         WHERE p.accum_tx_hash = $2 AND m.cycle_id IS NOT NULL AND p.artifact_json->>'cycle_id' = m.cycle_id
+		         ORDER BY p.created_at DESC LIMIT 1)
+		FROM intent_member_outcomes m WHERE m.intent_id = $1 ORDER BY m.chain_id`, lc.IntentID, lc.AccumTxHash)
 	if err != nil {
 		return nil, fmt.Errorf("query intent member outcomes: %w", err)
 	}
@@ -76,7 +80,8 @@ func (r *IntentLifecycleRepository) members(ctx context.Context, lc *IntentLifec
 	var order []int64
 	for rows.Next() {
 		m := IntentMemberOutcome{Recorded: true}
-		if err := rows.Scan(&m.ChainID, &m.Settlement, &m.ProofCycle, &m.Legs, &m.SettlementTx, &m.WriteBackTx, &m.CycleID, &m.Reason, &m.RecordedAt); err != nil {
+		if err := rows.Scan(&m.ChainID, &m.Settlement, &m.ProofCycle, &m.Legs, &m.SettlementTx, &m.WriteBackTx, &m.CycleID, &m.Reason, &m.RecordedAt,
+			&m.EffectsProven, &m.ProofID); err != nil {
 			return nil, fmt.Errorf("scan intent member outcome: %w", err)
 		}
 		recorded[m.ChainID] = m
