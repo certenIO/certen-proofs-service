@@ -72,6 +72,12 @@ type IntentMemberOutcome struct {
 	CycleID      *string    `json:"cycle_id"`
 	Reason       *string    `json:"reason"`
 	RecordedAt   *time.Time `json:"recorded_at"`
+	// EffectsProven: whether the member's committed contract-call effects were proven (null: none committed, or not
+	// assessed; false: provably absent - the member counts as failed).
+	EffectsProven *bool `json:"effects_proven"`
+	// ProofID is the proof the member's recording cycle produced (the artifact whose cycle_id is the member's), or null
+	// when it has none. A multi-member intent has one per member (RB4-F61); another member's is never named.
+	ProofID *string `json:"proof_id"`
 }
 
 // IntentLifecycleEnriched extends IntentLifecycle with transaction metadata from batch_transactions
