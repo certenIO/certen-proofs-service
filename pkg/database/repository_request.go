@@ -159,6 +159,54 @@ func (r *RequestRepository) GetRequestsByBatch(ctx context.Context, batchID uuid
 }
 
 // ============================================================================
+// TERMINAL-REQUEST FEED
+// ============================================================================
+//
+// The terminal statuses are 'completed', 'failed' and 'cancelled' (the status constraint admits no other
+// end). 'failed' ends a request only once its attempts are spent (the fulfiller re-queues it before then);
+// nothing writes 'cancelled' today, and it is served if anything does.
+
+// TerminalSettleWindow is how old a completed_at must be before the feed serves it. completed_at is the
+// writing transaction's start time, so a row can commit after a later-stamped row was already served; a
+// cursor that had moved past it would never see it. Rows are served only once every write that could
+// carry an earlier stamp has long committed.
+const TerminalSettleWindow = 5 * time.Second
+
+// RequestPosition is a place in the terminal-request feed: after the request that ended at EndedAt with
+// id RequestID. The zero RequestID sorts before every id at that instant.
+type RequestPosition struct {
+	EndedAt   time.Time
+	RequestID uuid.UUID
+}
+
+// GetTerminalRequestsAfter returns up to limit requests that reached a terminal status after `after`, in
+// (completed_at, request_id) order, leaving out those that ended within TerminalSettleWindow.
+//
+// The order is completed_at, the time the request ended, and only a row that carries it can be placed on
+// the feed. The validators stamp it when a request completes; they do NOT stamp it when a request fails
+// (no column records when a request failed). CountTerminalWithoutEndTime counts those, so the feed names
+// what it cannot serve instead of dropping it silently.
+func (r *RequestRepository) GetTerminalRequestsAfter(ctx context.Context, after RequestPosition, limit int) ([]*ProofRequest, error) {
+	return r.getMany(ctx, "terminal requests", `WHERE status IN ('completed', 'failed', 'cancelled')
+		AND completed_at IS NOT NULL
+		AND completed_at <= NOW() - make_interval(secs => $1)
+		AND (completed_at, request_id) > ($2::timestamptz, $3::uuid)
+		ORDER BY completed_at ASC, request_id ASC LIMIT $4`,
+		TerminalSettleWindow.Seconds(), after.EndedAt, after.RequestID, limit)
+}
+
+// CountTerminalWithoutEndTime counts requests in a terminal status that carry no completed_at: the
+// terminal-request feed cannot place them in time, so it cannot serve them.
+func (r *RequestRepository) CountTerminalWithoutEndTime(ctx context.Context) (int64, error) {
+	var count int64
+	if err := r.client.QueryRowContext(ctx, `SELECT COUNT(*) FROM proof_requests
+		WHERE status IN ('completed', 'failed', 'cancelled') AND completed_at IS NULL`).Scan(&count); err != nil {
+		return 0, fmt.Errorf("failed to count terminal requests without an end time: %w", err)
+	}
+	return count, nil
+}
+
+// ============================================================================
 // STATUS UPDATE OPERATIONS
 // ============================================================================
 
