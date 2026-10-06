@@ -137,8 +137,9 @@ func TestTerminalRequestFeedServesEveryEndInOrderAndPages(t *testing.T) {
 	if code != http.StatusOK || len(page.Requests) != 0 || page.Next != "" || page.Cursor == "" {
 		t.Fatalf("an empty page: %d %s", code, body)
 	}
-	position, err := decodeRequestCursor(page.Cursor)
-	if err != nil || !position.EndedAt.Equal(future) || position.RequestID != uuid.Nil {
+	position, err := decodeFeedCursor(page.Cursor)
+	if err != nil || !position.Request.EndedAt.Equal(future) || position.Request.RequestID != uuid.Nil ||
+		!position.Member.RecordedAt.Equal(future) || position.Member.IntentID != "" || position.Member.ChainID != 0 {
 		t.Fatalf("an empty page must hand back the position asked for: %+v %v", position, err)
 	}
 }
@@ -232,7 +233,8 @@ func TestTerminalRequestFeedFollowsTheWriter(t *testing.T) {
 func TestTerminalRequestFeedRefusesByName(t *testing.T) {
 	_, repos := recordsDB(t)
 	h := NewBundleHandlers(repos, nil, log.New(io.Discard, "", 0))
-	valid := encodeRequestCursor(database.RequestPosition{EndedAt: time.Now(), RequestID: uuid.New()})
+	valid := encodeFeedCursor(feedPosition{Request: database.RequestPosition{EndedAt: time.Now(), RequestID: uuid.New()},
+		Member: database.MemberPosition{RecordedAt: time.Now(), IntentID: "i|d", ChainID: 7}})
 
 	cases := []struct {
 		name      string

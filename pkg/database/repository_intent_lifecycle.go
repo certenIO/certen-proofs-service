@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"time"
 )
 
 // IntentLifecycleRepository handles read-only queries for intent lifecycle tracking
@@ -215,4 +216,73 @@ func (r *IntentLifecycleRepository) scanEnrichedRows(ctx context.Context, query 
 	}
 
 	return results, nil
+}
+
+// ============================================================================
+// RECORDED-MEMBER FEED
+// ============================================================================
+//
+// An intent on several chains has one proof request and one chain member per chain. The request ends with the first
+// member's proof; each later member's outcome - its settlement, its proof cycle, the proof that cycle produced - is
+// recorded in intent_member_outcomes, in the same transaction that derives the intent's lifecycle from its members. A
+// caller that learns of ends only from the request feed learns nothing when the last member lands, so the request feed
+// serves these records beside its requests (server.HandleTerminalRequests).
+
+// MemberPosition is a place in the recorded-member feed: after the member (IntentID, ChainID) recorded at RecordedAt.
+// An empty IntentID sorts before every intent at that instant.
+type MemberPosition struct {
+	RecordedAt time.Time
+	IntentID   string
+	ChainID    int64
+}
+
+// RecordedMember is one chain member's recorded outcome, as the feed serves it.
+type RecordedMember struct {
+	IntentID    string
+	ChainID     int64
+	AccumTxHash sql.NullString // the intent's, from its lifecycle row; null when the member has none
+	Settlement  string
+	ProofCycle  string
+	ProofID     sql.NullString // the proof the member's recording cycle produced, as members() names it
+	RecordedAt  time.Time
+}
+
+// membersRecordedAfter orders by (recorded_at, intent_id, chain_id), the id compared byte-wise (COLLATE "C") so the
+// order, and so the cursor, does not depend on the database's collation.
+const membersRecordedAfter = `SELECT m.intent_id, m.chain_id, l.accum_tx_hash, m.settlement, m.proof_cycle,
+		(SELECT p.proof_id::text FROM proof_artifacts p
+		  WHERE p.accum_tx_hash = l.accum_tx_hash AND m.cycle_id IS NOT NULL AND p.artifact_json->>'cycle_id' = m.cycle_id
+		  ORDER BY p.created_at DESC LIMIT 1),
+		m.recorded_at
+	FROM intent_member_outcomes m LEFT JOIN intent_lifecycle l ON l.intent_id = m.intent_id
+	WHERE m.recorded_at <= NOW() - make_interval(secs => $1)
+	  AND (m.recorded_at, m.intent_id COLLATE "C", m.chain_id) > ($2::timestamptz, $3::text COLLATE "C", $4::bigint)
+	ORDER BY m.recorded_at ASC, m.intent_id COLLATE "C" ASC, m.chain_id ASC
+	LIMIT $5`
+
+// GetMembersRecordedAfter returns up to limit chain-member outcomes recorded after `after`, in (recorded_at, intent_id,
+// chain_id) order, leaving out those recorded within TerminalSettleWindow: recorded_at is the recording transaction's
+// start time, so a row can commit after a later-stamped row was served, exactly as a request's completed_at can.
+//
+// A member is recorded again whenever its outcome changes (recorded_at moves to the new record), so each record of it
+// is served once, at the place its latest record holds.
+func (r *IntentLifecycleRepository) GetMembersRecordedAfter(ctx context.Context, after MemberPosition, limit int) ([]RecordedMember, error) {
+	rows, err := r.client.QueryContext(ctx, membersRecordedAfter,
+		TerminalSettleWindow.Seconds(), after.RecordedAt, after.IntentID, after.ChainID, limit)
+	if err != nil {
+		return nil, fmt.Errorf("query recorded members: %w", err)
+	}
+	defer rows.Close()
+	var out []RecordedMember
+	for rows.Next() {
+		var m RecordedMember
+		if err := rows.Scan(&m.IntentID, &m.ChainID, &m.AccumTxHash, &m.Settlement, &m.ProofCycle, &m.ProofID, &m.RecordedAt); err != nil {
+			return nil, fmt.Errorf("scan recorded member: %w", err)
+		}
+		out = append(out, m)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate recorded members: %w", err)
+	}
+	return out, nil
 }
