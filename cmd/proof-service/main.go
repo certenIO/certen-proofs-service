@@ -129,7 +129,7 @@ func main() {
 	// API v1 Proof Request endpoints
 	mux.HandleFunc("/api/v1/proofs/request", bundleHandlers.HandleRequestProof)
 	mux.HandleFunc("/api/v1/proofs/request/", bundleHandlers.HandleGetRequestStatus)
-	// Requests that ended since a cursor: the gateway's poller asks once per tick (see request_feed_handlers.go).
+	// Requests that ended, and chain members recorded, since a cursor: the gateway's poller asks once per tick (see request_feed_handlers.go).
 	mux.HandleFunc("/api/v1/proofs/requests/completed", bundleHandlers.HandleTerminalRequests)
 
 	// API v1 Verification endpoints
