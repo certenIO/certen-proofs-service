@@ -86,6 +86,7 @@ type ProofRequestInput struct {
 	AccountURL      string  `json:"account_url,omitempty"`
 	ProofClass      string  `json:"proof_class"` // "on_cadence" or "on_demand"
 	GovernanceLevel string  `json:"governance_level,omitempty"` // "G0", "G1", "G2"
+	// CallbackURL is read only to be refused by name: the validators no longer deliver a webhook (RB7 T5-4).
 	CallbackURL     *string `json:"callback_url,omitempty"`
 	Priority        int     `json:"priority,omitempty"`
 }
@@ -129,6 +130,12 @@ func (h *BundleHandlers) HandleRequestProof(w http.ResponseWriter, r *http.Reque
 	var input ProofRequestInput
 	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
 		h.writeError(w, http.StatusBadRequest, "INVALID_REQUEST", "Invalid request format")
+		return
+	}
+
+	// A webhook is not supported: refuse the field by name rather than store a destination nothing will call.
+	if input.CallbackURL != nil && *input.CallbackURL != "" {
+		h.writeError(w, http.StatusBadRequest, "CALLBACK_NOT_SUPPORTED", "callback_url is not supported; poll GET /api/v1/proofs/requests/completed for finished requests")
 		return
 	}
 
@@ -177,7 +184,6 @@ func (h *BundleHandlers) HandleRequestProof(w http.ResponseWriter, r *http.Reque
 		ProofClass:      input.ProofClass,
 		GovernanceLevel: nilIfEmpty(input.GovernanceLevel),
 		APIKeyID:        apiKeyID,
-		CallbackURL:     input.CallbackURL,
 		Status:          "pending",
 	}
 

@@ -109,7 +109,6 @@ class ProofApiClient {
     account_url?: string;
     proof_class: ProofClass;
     governance_level?: GovernanceLevel;
-    callback_url?: string;
   }): Promise<{ request_id: string; status: string; estimated_time_ms: number; message: string }> {
     return this.fetch('/proofs/request', {
       method: 'POST',
