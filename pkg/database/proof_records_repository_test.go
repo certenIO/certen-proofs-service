@@ -577,7 +577,7 @@ func TestProofRequestLifecycle(t *testing.T) {
 		t.Helper()
 		request, err := requests.CreateRequest(ctx, &NewProofRequest{
 			AccumTxHash: artifact.AccumTxHash, AccountURL: artifact.AccountURL, RequestType: class,
-			GovernanceLevel: GovLevelG1, Priority: priority, RequesterID: requester, CallbackURL: "https://example.invalid/cb",
+			GovernanceLevel: GovLevelG1, Priority: priority, RequesterID: requester,
 		})
 		if err != nil {
 			t.Fatalf("CreateRequest: %v", err)
@@ -588,7 +588,7 @@ func TestProofRequestLifecycle(t *testing.T) {
 	low := newRequest(RequestTypeOnCadence, PriorityLow)
 	urgent := newRequest(RequestTypeOnDemand, PriorityUrgent)
 	defaulted := newRequest(RequestTypeOnDemand, "")
-	if defaulted.Priority != PriorityHigh || urgent.Status != RequestStatusPending || !urgent.CallbackURL.Valid || !urgent.GovernanceLevel.Valid {
+	if defaulted.Priority != PriorityHigh || urgent.Status != RequestStatusPending || urgent.CallbackURL.Valid || !urgent.GovernanceLevel.Valid {
 		t.Fatalf("requests created as %+v / %+v", defaulted, urgent)
 	}
 

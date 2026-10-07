@@ -125,6 +125,14 @@ type ProofArtifact struct {
 	ToAddress   string `json:"to_address,omitempty"`
 	Amount      string `json:"amount,omitempty"`
 	TokenSymbol string `json:"token_symbol,omitempty"`
+
+	// DeclaredEffects is what this transaction committed IN ADVANCE to doing (RB-4), joined from
+	// batch_transactions: a JSON array of {contract, topic0, dataHash?}. The three states are the whole value of
+	// the field: key absent = the commitment is unknown (no envelope, or it predates the column); present `[]` =
+	// the envelope parsed and nothing was declared (a native transfer); present `[...]` = those events were
+	// committed to. `omitempty` on a nil RawMessage gives the first state, so it must never be defaulted to `[]`,
+	// which would turn "we never found out" into a positive claim. See the validator's migration 012.
+	DeclaredEffects json.RawMessage `json:"declared_effects,omitempty" db:"declared_effects"`
 }
 
 // NewProofArtifact is used to create a new proof artifact
