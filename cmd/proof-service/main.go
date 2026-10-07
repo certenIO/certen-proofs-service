@@ -57,6 +57,9 @@ func main() {
 
 	// Set up logging
 	logger := log.New(os.Stdout, "[ProofService] ", log.LstdFlags|log.Lshortfile)
+	if err := authStartupCheck(); err != nil {
+		logger.Fatalf("refusing to start: %v", err)
+	}
 	logger.Printf("Starting Certen Proof Artifact Service...")
 	logger.Printf("Service ID: %s", cfg.ValidatorID)
 

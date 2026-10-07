@@ -1,6 +1,7 @@
 package server
 
 import (
+	"crypto/sha256"
 	"context"
 	"encoding/json"
 	"io"
@@ -38,12 +39,30 @@ func TestEndpointsAcceptTheAccumulateTransactionID(t *testing.T) {
 		_, _ = db.ExecContext(bg, `DELETE FROM proof_artifacts WHERE proof_id = $1`, artifact.ProofID)
 	})
 
+	// A request needs a tenant's API key: a real row, so the request's api_key_id satisfies its foreign key.
+	secret := uuid.NewString()
+	keyHash := sha256.Sum256([]byte(secret))
+	key, err := repos.ProofArtifacts.CreateAPIKey(ctx, &database.NewAPIKey{
+		KeyHash: keyHash[:], ClientName: "txid-api-test", ClientType: "service",
+		CanReadProofs: true, CanRequestProofs: true, RateLimitPerMin: 100, IsActive: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		bg := context.Background()
+		_, _ = db.ExecContext(bg, `DELETE FROM proof_requests WHERE api_key_id = $1`, key.KeyID)
+		_, _ = db.ExecContext(bg, `DELETE FROM api_keys WHERE key_id = $1`, key.KeyID)
+	})
+
 	bundles := NewBundleHandlers(repos, nil, log.New(io.Discard, "", 0))
 	post := func(accumTx string) (int, ProofRequestResponse) {
 		t.Helper()
 		body := `{"accum_tx_hash":"` + accumTx + `","proof_class":"on_demand"}`
 		rec := httptest.NewRecorder()
-		bundles.HandleRequestProof(rec, httptest.NewRequest(http.MethodPost, "/api/v1/proofs/request", strings.NewReader(body)))
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/proofs/request", strings.NewReader(body))
+		req.Header.Set("X-API-Key", secret)
+		bundles.HandleRequestProof(rec, req)
 		var response ProofRequestResponse
 		_ = json.Unmarshal(rec.Body.Bytes(), &response)
 		return rec.Code, response
