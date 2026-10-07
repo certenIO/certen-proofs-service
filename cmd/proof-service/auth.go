@@ -29,6 +29,7 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/hex"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -56,6 +57,25 @@ var (
 // Fail-closed by default (P2): if AUTH_REQUIRED is set we honor it; if it is
 // unset we ENFORCE unless DEVELOPMENT_MODE=true. A forgotten env var must never
 // silently serve the proof corpus unauthenticated.
+// authStartupCheck decides whether the service may start at all. Enforcement must be chosen out loud: AUTH_REQUIRED=true,
+// or DEVELOPMENT_MODE=true for a development run. A forgotten variable, or enforcement turned off outside development,
+// stops the service with a named error, so a restart under a changed environment can never silently serve the proof
+// corpus open (RB7 T5-10).
+func authStartupCheck() error {
+	required := os.Getenv("AUTH_REQUIRED")
+	dev := os.Getenv("DEVELOPMENT_MODE") == "true"
+	switch {
+	case required == "true":
+		return nil
+	case dev:
+		return nil
+	case required == "":
+		return fmt.Errorf("AUTH_NOT_EXPLICIT: set AUTH_REQUIRED=true (or DEVELOPMENT_MODE=true for a development run); the service does not choose for you")
+	default:
+		return fmt.Errorf("AUTH_DISABLED_OUTSIDE_DEVELOPMENT: AUTH_REQUIRED=%q turns authentication off, which is allowed only with DEVELOPMENT_MODE=true", required)
+	}
+}
+
 func authEnforce() bool {
 	if v := os.Getenv("AUTH_REQUIRED"); v != "" {
 		return v == "true"

@@ -40,6 +40,14 @@ type BundleHandlers struct {
 	logger          *log.Logger
 	rateLimiter     *RateLimiter
 	apiKeyValidator *APIKeyValidator
+	requests        proofRequestStore
+}
+
+// proofRequestStore is what HandleRequestProof needs of the database: the lookup of an existing proof and the insert of
+// a request. The repository satisfies it; tests give it a recording fake.
+type proofRequestStore interface {
+	GetProofByTxHash(ctx context.Context, txHash string) (*database.ProofArtifact, error)
+	CreateProofRequest(ctx context.Context, input *database.NewBundleProofRequest) (*database.BundleProofRequest, error)
 }
 
 // BundleHandlersConfig contains configuration for bundle handlers
@@ -73,6 +81,7 @@ func NewBundleHandlers(
 		logger:          logger,
 		rateLimiter:     NewRateLimiter(config.RateLimitPerMinute),
 		apiKeyValidator: NewAPIKeyValidator(repos),
+		requests:        repos.ProofArtifacts,
 	}
 }
 
@@ -107,21 +116,21 @@ func (h *BundleHandlers) HandleRequestProof(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	// Validate API key
-	apiKey, err := h.validateAPIKey(r)
-	if err != nil {
-		h.writeError(w, http.StatusUnauthorized, "UNAUTHORIZED", err.Error())
+	// A state-changing route needs a tenant's API key on top of the service token or login that got the caller this
+	// far. The key names who is asking: it carries the permission, the rate limit and the attribution stored with the
+	// request. There is no anonymous caller.
+	apiKey, status, code, msg := h.requireAPIKey(r)
+	if apiKey == nil {
+		h.writeError(w, status, code, msg)
 		return
 	}
 
-	// Check rate limit
-	if apiKey != nil && !h.rateLimiter.Allow(apiKey.ClientName) {
+	if !h.rateLimiter.AllowWithLimit(apiKey.KeyID.String(), apiKey.RateLimitPerMin) {
 		h.writeError(w, http.StatusTooManyRequests, "RATE_LIMITED", "Rate limit exceeded")
 		return
 	}
 
-	// Check permissions
-	if apiKey != nil && !apiKey.CanRequestProofs {
+	if !apiKey.CanRequestProofs {
 		h.writeError(w, http.StatusForbidden, "FORBIDDEN", "API key does not have proof request permission")
 		return
 	}
@@ -159,7 +168,7 @@ func (h *BundleHandlers) HandleRequestProof(w http.ResponseWriter, r *http.Reque
 
 	// Check if proof already exists
 	if input.AccumTxHash != "" {
-		existingProof, err := h.repos.ProofArtifacts.GetProofByTxHash(ctx, input.AccumTxHash)
+		existingProof, err := h.requests.GetProofByTxHash(ctx, input.AccumTxHash)
 		if err == nil && existingProof != nil {
 			// Return existing proof
 			h.writeJSON(w, http.StatusOK, ProofRequestResponse{
@@ -173,10 +182,7 @@ func (h *BundleHandlers) HandleRequestProof(w http.ResponseWriter, r *http.Reque
 	}
 
 	// Create proof request
-	var apiKeyID *uuid.UUID
-	if apiKey != nil {
-		apiKeyID = &apiKey.KeyID
-	}
+	apiKeyID := &apiKey.KeyID
 
 	newRequest := &database.NewBundleProofRequest{
 		AccumTxHash:     nilIfEmpty(input.AccumTxHash),
@@ -187,7 +193,7 @@ func (h *BundleHandlers) HandleRequestProof(w http.ResponseWriter, r *http.Reque
 		Status:          "pending",
 	}
 
-	createdRequest, err := h.repos.ProofArtifacts.CreateProofRequest(ctx, newRequest)
+	createdRequest, err := h.requests.CreateProofRequest(ctx, newRequest)
 	if err != nil {
 		h.logger.Printf("Error creating proof request: %v", err)
 		h.writeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to create proof request")
@@ -754,24 +760,38 @@ func NewRateLimiter(ratePerMinute int) *RateLimiter {
 	}
 }
 
-// Allow checks if a request is allowed for the given client
+// Allow checks if a request is allowed for the given client, at the limiter's default rate.
 func (rl *RateLimiter) Allow(clientID string) bool {
+	return rl.AllowWithLimit(clientID, rl.ratePerMin)
+}
+
+// AllowWithLimit is Allow at a limit of the caller's own: an API key's rate_limit_per_min. A limit of zero or less is
+// the limiter's default, so a key row that never set one is limited, not unlimited.
+func (rl *RateLimiter) AllowWithLimit(clientID string, perMin int) bool {
+	if perMin <= 0 {
+		perMin = rl.ratePerMin
+	}
 	rl.mu.Lock()
 	defer rl.mu.Unlock()
 
 	bucket, ok := rl.buckets[clientID]
 	if !ok {
 		bucket = &tokenBucket{
-			tokens:    rl.ratePerMin,
+			tokens:    perMin,
 			lastFill:  time.Now(),
-			maxTokens: rl.ratePerMin,
+			maxTokens: perMin,
 		}
 		rl.buckets[clientID] = bucket
+	}
+	if bucket.maxTokens != perMin {
+		// The key's limit was changed: take the new limit, keeping no more tokens than it allows.
+		bucket.maxTokens = perMin
+		bucket.tokens = minInt(bucket.tokens, perMin)
 	}
 
 	// Refill tokens based on time elapsed
 	elapsed := time.Since(bucket.lastFill)
-	tokensToAdd := int(elapsed.Minutes() * float64(rl.ratePerMin))
+	tokensToAdd := int(elapsed.Minutes() * float64(perMin))
 	if tokensToAdd > 0 {
 		bucket.tokens = minInt(bucket.tokens+tokensToAdd, bucket.maxTokens)
 		bucket.lastFill = time.Now()
@@ -797,16 +817,27 @@ type cachedAPIKey struct {
 
 // APIKeyValidator validates API keys
 type APIKeyValidator struct {
-	repos    *database.Repositories
+	keys     apiKeyLookup
 	cache    map[string]*cachedAPIKey
 	cacheMu  sync.RWMutex
 	cacheTTL time.Duration
 }
 
-// NewAPIKeyValidator creates a new API key validator
+// apiKeyLookup is what the validator needs of the api_keys table.
+type apiKeyLookup interface {
+	GetAPIKeyByHash(ctx context.Context, keyHash []byte) (*database.APIKey, error)
+	UpdateAPIKeyLastUsed(ctx context.Context, keyID uuid.UUID) error
+}
+
+// NewAPIKeyValidator creates a new API key validator over the database
 func NewAPIKeyValidator(repos *database.Repositories) *APIKeyValidator {
+	return NewAPIKeyValidatorWith(repos.ProofArtifacts)
+}
+
+// NewAPIKeyValidatorWith creates a validator over any key lookup.
+func NewAPIKeyValidatorWith(keys apiKeyLookup) *APIKeyValidator {
 	return &APIKeyValidator{
-		repos:    repos,
+		keys:     keys,
 		cache:    make(map[string]*cachedAPIKey),
 		cacheTTL: 5 * time.Minute,
 	}
@@ -829,7 +860,7 @@ func (v *APIKeyValidator) Validate(ctx context.Context, apiKeyHeader string) (*d
 
 	// Hash the API key for lookup
 	keyHash := sha256.Sum256([]byte(apiKeyHeader))
-	keyRecord, err := v.repos.ProofArtifacts.GetAPIKeyByHash(ctx, keyHash[:])
+	keyRecord, err := v.keys.GetAPIKeyByHash(ctx, keyHash[:])
 	if err != nil {
 		return nil, fmt.Errorf("failed to validate API key: %w", err)
 	}
@@ -849,7 +880,7 @@ func (v *APIKeyValidator) Validate(ctx context.Context, apiKeyHeader string) (*d
 	v.cacheMu.Unlock()
 
 	// Update last used timestamp
-	v.repos.ProofArtifacts.UpdateAPIKeyLastUsed(ctx, keyRecord.KeyID)
+	v.keys.UpdateAPIKeyLastUsed(ctx, keyRecord.KeyID)
 
 	return keyRecord, nil
 }
@@ -857,6 +888,21 @@ func (v *APIKeyValidator) Validate(ctx context.Context, apiKeyHeader string) (*d
 // =============================================================================
 // HELPER METHODS
 // =============================================================================
+
+// requireAPIKey is the key check for a state-changing route. The key is read from the X-API-Key header only: a URL is
+// logged and cached, so a key in a query string is the same as no key. It returns the key, or the status, code and
+// message of the named refusal.
+func (h *BundleHandlers) requireAPIKey(r *http.Request) (*database.APIKey, int, string, string) {
+	secret := r.Header.Get("X-API-Key")
+	if secret == "" {
+		return nil, http.StatusUnauthorized, "API_KEY_REQUIRED", "This route needs an API key in the X-API-Key header"
+	}
+	key, err := h.apiKeyValidator.Validate(r.Context(), secret)
+	if err != nil {
+		return nil, http.StatusUnauthorized, "INVALID_API_KEY", err.Error()
+	}
+	return key, 0, "", ""
+}
 
 func (h *BundleHandlers) validateAPIKey(r *http.Request) (*database.APIKey, error) {
 	apiKey := r.Header.Get("X-API-Key")

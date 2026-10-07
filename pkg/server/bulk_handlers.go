@@ -180,7 +180,7 @@ func (h *BulkHandlers) HandleBulkExport(w http.ResponseWriter, r *http.Request) 
 	}
 
 	// Check rate limit
-	if !h.rateLimiter.Allow(apiKey.ClientName) {
+	if !h.rateLimiter.AllowWithLimit(apiKey.KeyID.String(), apiKey.RateLimitPerMin) {
 		h.writeError(w, http.StatusTooManyRequests, "RATE_LIMITED", "Rate limit exceeded for bulk operations")
 		return
 	}
@@ -918,7 +918,8 @@ func (h *BulkHandlers) getTimeWindowStats(ctx context.Context, start, end time.T
 
 func (h *BulkHandlers) validateAPIKey(r *http.Request) (*database.APIKey, error) {
 	apiKey := r.Header.Get("X-API-Key")
-	if apiKey == "" {
+	if apiKey == "" && r.Method == http.MethodGet {
+		// Only a read may carry the key in the URL (a status poll); a state-changing call takes it from the header.
 		apiKey = r.URL.Query().Get("api_key")
 	}
 	if apiKey == "" {
