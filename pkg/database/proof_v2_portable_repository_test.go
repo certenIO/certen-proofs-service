@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -17,12 +18,40 @@ func TestGetPortableV2AgainstTheValidatorsTables(t *testing.T) {
 	if dsn == "" {
 		t.Skip("CERTEN_TEST_DB is not set; the validator's tables are needed")
 	}
-	db, err := sql.Open("postgres", dsn)
+	// A private schema, so this never touches the rows other tests in a shared database read: the DDL below is the validator's
+	// migration 00026, and proof_artifacts only as far as the query reads it.
+	schema := "portable_" + strings.ReplaceAll(uuid.NewString(), "-", "")[:12]
+	admin, err := sql.Open("postgres", dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer admin.Close()
+	ctx := context.Background()
+	if _, err := admin.ExecContext(ctx, "CREATE SCHEMA "+schema); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = admin.Exec("DROP SCHEMA " + schema + " CASCADE") })
+	sep := "?"
+	if strings.Contains(dsn, "?") {
+		sep = "&"
+	}
+	db, err := sql.Open("postgres", dsn+sep+"search_path="+schema)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	ctx := context.Background()
+	for _, ddl := range []string{
+		`CREATE TABLE proof_artifacts (proof_id uuid PRIMARY KEY, intent_id character varying(256))`,
+		`CREATE TABLE proof_v2_portable (intent_id character varying(128) PRIMARY KEY, document text NOT NULL,
+			majors integer NOT NULL CONSTRAINT proof_v2_portable_majors_is_positive CHECK (majors > 0), govroot_v3_inputs text,
+			built_at timestamp with time zone DEFAULT now() NOT NULL, updated_at timestamp with time zone DEFAULT now() NOT NULL)`,
+		`CREATE TABLE proof_v2_spine_json (major_index bigint PRIMARY KEY CONSTRAINT proof_v2_spine_json_major_is_positive CHECK (major_index > 0),
+			record text NOT NULL, recorded_at timestamp with time zone DEFAULT now() NOT NULL)`,
+	} {
+		if _, err := db.ExecContext(ctx, ddl); err != nil {
+			t.Fatal(err)
+		}
+	}
 	r := NewProofArtifactRepository(db)
 
 	intent := "it-" + uuid.NewString()
@@ -35,16 +64,10 @@ func TestGetPortableV2AgainstTheValidatorsTables(t *testing.T) {
 		}
 	}
 	art := func(id uuid.UUID, intentID string) {
-		mustExec(`INSERT INTO proof_artifacts (proof_id, proof_type, accum_tx_hash, account_url, proof_class, validator_id, artifact_json, artifact_hash, intent_id)
-			VALUES ($1, 'chained', $2, 'acc://x.acme/data', 'on_demand', 'v1', '{}'::jsonb, '\x00', $3)`, id, "tx-"+id.String(), intentID)
+		mustExec(`INSERT INTO proof_artifacts (proof_id, intent_id) VALUES ($1, $2)`, id, intentID)
 	}
 	art(proof, intent)
 	art(unbuilt, "it-none-"+uuid.NewString())
-	t.Cleanup(func() {
-		_, _ = db.Exec(`DELETE FROM proof_artifacts WHERE proof_id = ANY($1)`, "{"+proof.String()+","+unbuilt.String()+"}")
-		_, _ = db.Exec(`DELETE FROM proof_v2_portable WHERE intent_id = $1`, intent)
-		_, _ = db.Exec(`DELETE FROM proof_v2_spine_json`)
-	})
 	mustExec(`DELETE FROM proof_v2_spine_json`)
 	mustExec(`INSERT INTO proof_v2_spine_json (major_index, record) VALUES (1, '{"index":1}'), (2, '{"index":2}'), (3, '{"index":3}')`)
 
