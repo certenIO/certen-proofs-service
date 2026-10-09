@@ -171,10 +171,15 @@ func main() {
 	batchHandlers := server.NewBatchHandlers(repos, logger)
 	mux.HandleFunc("/api/v1/batches/", batchHandlers.HandleBatches)
 
+	// The portable proof v2 document: what a verifier needs to check the Accumulate side of a proof offline (RB7b-F30).
+	portableHandlers := server.NewPortableHandlers(repos.ProofArtifacts, logger)
+
 	// API v1 Proof Detail endpoints (with sub-paths)
 	mux.HandleFunc("/api/v1/proofs/", func(w http.ResponseWriter, r *http.Request) {
 		path := r.URL.Path
 		switch {
+		case strings.HasSuffix(path, "/v2"):
+			portableHandlers.HandleGetProofV2(w, r)
 		case strings.HasSuffix(path, "/bundle/verify"):
 			bundleHandlers.HandleVerifyBundle(w, r)
 		case strings.HasSuffix(path, "/bundle"):
