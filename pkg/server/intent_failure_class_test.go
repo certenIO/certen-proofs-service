@@ -39,8 +39,19 @@ func TestAFailedIntentIsServedWithItsFailureClass(t *testing.T) {
 	if got.Status != "failed" || got.FailureClass == nil || *got.FailureClass != "governance_unsatisfied" {
 		t.Fatalf("served %s / %v: %s", got.Status, got.FailureClass, rr.Body.String())
 	}
-	last := database.RequiredSchema[len(database.RequiredSchema)-1]
-	if last.Version != "00014" {
-		t.Fatalf("the service requires the shared catalog through %s; its SQL reads intent_lifecycle.failure_class (00014)", last.Version)
+	// What this test protects: the service's SQL reads intent_lifecycle.failure_class (migration 00014), so 00014 must be among the
+	// migrations the startup check requires, with the file's checksum. (It used to assert that 00014 was the NEWEST required
+	// migration, which broke the day a newer one was required.)
+	var found *database.SchemaVersion
+	for i := range database.RequiredSchema {
+		if database.RequiredSchema[i].Version == "00014" {
+			found = &database.RequiredSchema[i]
+		}
+	}
+	if found == nil {
+		t.Fatalf("the service reads intent_lifecycle.failure_class (00014) but does not require migration 00014")
+	}
+	if found.SHA256 != "490c05b0486492537eb72308599cf390cca561c0a65da4924625fdf292058e2f" {
+		t.Fatalf("migration 00014 is required with checksum %s", found.SHA256)
 	}
 }
