@@ -59,10 +59,10 @@ func finalityETag(base [32]byte, proofID uuid.UUID, ids []database.FinalityIdent
 	h.Write(base[:])
 	h.Write(proofID[:])
 	for _, id := range ids {
-		var b [9]byte
-		binary.BigEndian.PutUint64(b[:8], uint64(id.Seq))
-		b[8] = byte(id.Level)
-		h.Write(b[:])
+		var seq [8]byte
+		binary.BigEndian.PutUint64(seq[:], uint64(id.Seq))
+		h.Write(seq[:])
+		h.Write([]byte{byte(id.Level)})
 		h.Write(id.OwnHash)
 	}
 	return `"` + hex.EncodeToString(h.Sum(nil)) + `"`
