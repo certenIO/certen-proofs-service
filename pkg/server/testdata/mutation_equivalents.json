@@ -1,0 +1,26 @@
+[
+  {
+    "file": "finality_handlers.go",
+    "function": "FinalityHandlers.HandleGetProofFinality",
+    "operator": "guard_off",
+    "original": "if err != nil",
+    "mutated": "if false",
+    "reason": "The error of json.Marshal(summary) is unreachable: the summary is a struct of strings, integers, a nullable leg and json.RawMessage members, and the only RawMessage (Reason) is a value that json.Decoder already decoded and validated as an object in levelFromStatus. With the guard off the same body is written. The guard stays as the defence in depth of the last encoding step; every other error guard of the handler is killed by a test."
+  },
+  {
+    "file": "portable_handlers.go",
+    "function": "ComposePortableWithFinality",
+    "operator": "guard_off",
+    "original": "if doc[\"majors\"], err = json.Marshal(majors); err != nil",
+    "mutated": "if doc[\"majors\"], err = json.Marshal(majors); false",
+    "reason": "Pre-existing code of ComposePortable, moved unchanged. The error of json.Marshal(majors) is unreachable: every element is a json.RawMessage the loop above has just accepted with json.Valid, and Marshal fails on a RawMessage only when it is not valid JSON. With the guard off the same value is returned."
+  },
+  {
+    "file": "portable_handlers.go",
+    "function": "PortableHandlers.HandleGetProofV2",
+    "operator": "guard_off",
+    "original": "…y, err = ComposePortableWithFinality(p, section); err != nil",
+    "mutated": "…y, err = ComposePortableWithFinality(p, section); false",
+    "reason": "The error is unreachable: the same document p was composed a few lines earlier by ComposePortable (which is ComposePortableWithFinality(p, nil)) and succeeded, and the only difference now is the finality member, which is a json.RawMessage that json.Marshal itself just produced in ComposeFinalitySection (valid JSON, so Marshal of the map cannot fail on it). With the guard off the same body is returned. The guard stays as the defence in depth of the last composition step; every other error guard of the handler is killed by a test."
+  }
+]

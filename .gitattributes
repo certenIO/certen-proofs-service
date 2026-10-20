@@ -1,0 +1,4 @@
+# Byte-exact test inputs. gen_goldens.py asserts the sha256 of chains.json (the validator's own vector file) and the migration
+# copies are pinned by sha256: an end-of-line conversion on a checkout (core.autocrlf) would change the bytes and fail both.
+pkg/server/testdata/finality/* -text
+pkg/database/testdata/validator/* -text

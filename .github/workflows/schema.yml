@@ -49,5 +49,17 @@ jobs:
         env:
           DATABASE_URL: ${{ env.CERTEN_TEST_DB }}
         run: go run ./cmd/schemamigrate -applied-by proofs-service-ci
+      - name: The migration copies equal the validator's files
+        # pkg/database/testdata/validator/* mirror certen-validator migrations 00027 and 00028 (the staged finality tables). A
+        # change of the validator's file after the copy was taken fails here, not on a production request. Compared with line
+        # endings removed, as the copies are pinned to their LF form.
+        run: |
+          set -eu
+          for name in 00027_proof_finality_addenda 00028_proof_finality_status_capture; do
+            if ! cmp <(tr -d '\r' < "pkg/database/testdata/validator/${name}.sql") <(tr -d '\r' < "certen-validator/db/migrations/${name}.sql"); then
+              echo "::error::pkg/database/testdata/validator/${name}.sql differs from certen-validator db/migrations/${name}.sql"
+              exit 1
+            fi
+          done
       - run: go vet ./...
       - run: go test ./... -count=1

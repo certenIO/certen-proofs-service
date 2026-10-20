@@ -168,6 +168,13 @@ var RequiredSchema = []SchemaVersion{
 	{"00012", "d36f9f1c4f342d413157e9dcbc90f2f815dffc7393a73a6c20b7706fbf6d57ec"},
 	{"00013", "38d31ffa49dec830d79272c9a38962539ecdb00314581c4b32011901a78dd2d1"},
 	{"00014", "490c05b0486492537eb72308599cf390cca561c0a65da4924625fdf292058e2f"},
+	// 00026 is the proof v2 portable document and its spine (GetPortableV2); 00027 and 00028 are the staged finality addenda and
+	// the builder's status (ListFinalityAddenda, ListFinalityStatus, the finality member of the document and GET .../finality).
+	// 00015-00025 are not pinned here. A database that lacks any of these three, or carries another file under its version, makes
+	// the service refuse to start: without them every GET /v2 would answer 500 on the first request instead.
+	{"00026", "3c8aab92e4d5bede91b245121f18e7f29459f987e816237d1ce4c0b0357324f8"},
+	{"00027", "33111ed2735c8af9581bf4502f422935c1131589f47a9e31b8b874301cfe7d63"},
+	{"00028", "759cfbda9571a7a1063a4034fcf7502ce94210800ed49eb53e4e5992ab8b81c5"},
 }
 
 // SchemaVersion is one applied migration of the shared catalog.
