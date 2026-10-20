@@ -380,15 +380,50 @@ func TestTamperedChainsAreComposedAsStoredNeverJudged(t *testing.T) {
 	}
 }
 
+// fakeFinality is the finality store of the portable handler. It counts what is read: the identities and the size are cheap, the
+// evidence is the expensive read that a matching If-None-Match must not cause.
 type fakeFinality struct {
 	rows []database.FinalityAddendum
-	err  error
+	err  error // the evidence read fails
 	got  uuid.UUID
+
+	idsErr, bytesErr error
+	bytes            *int64                      // the size the database reports; nil: the sum of the rows' evidence
+	late             []database.FinalityAddendum // rows committed after the identities were read
+
+	idReads, byteReads, evidenceReads int
+}
+
+func (f *fakeFinality) ListFinalityIdentities(_ context.Context, _ uuid.UUID) ([]database.FinalityIdentity, error) {
+	f.idReads++
+	if f.idsErr != nil {
+		return nil, f.idsErr
+	}
+	return identitiesOf(f.rows), nil
+}
+
+func (f *fakeFinality) FinalityEvidenceBytes(_ context.Context, _ uuid.UUID) (int64, error) {
+	f.byteReads++
+	if f.bytesErr != nil {
+		return 0, f.bytesErr
+	}
+	if f.bytes != nil {
+		return *f.bytes, nil
+	}
+	var n int64
+	for _, r := range f.rows {
+		n += int64(len(r.Evidence))
+	}
+	return n, nil
 }
 
 func (f *fakeFinality) ListFinalityAddenda(_ context.Context, id uuid.UUID) ([]database.FinalityAddendum, error) {
+	f.evidenceReads++
 	f.got = id
-	return f.rows, f.err
+	if f.err != nil {
+		return nil, f.err
+	}
+	return append(append([]database.FinalityAddendum(nil), f.rows...), f.late...), nil
 }
 
 func getV2(h *PortableHandlers, id string, hdr map[string]string) (int, string, http.Header) {
@@ -460,7 +495,11 @@ func TestHandlerRefusesWhatItCannotComposeWithANamed500(t *testing.T) {
 	}
 
 	// a failing read is not "no addenda": the document is not served without the member
-	code, body, _ = getV2(NewPortableHandlers(&fakePortable{p: stored2()}, nil).WithFinality(&fakeFinality{err: errors.New("db down")}), proof.String(), nil)
+	code, body, _ = getV2(NewPortableHandlers(&fakePortable{p: stored2()}, nil).WithFinality(&fakeFinality{idsErr: errors.New("db down")}), proof.String(), nil)
+	if code != http.StatusInternalServerError || strings.Contains(body, "majors") || !strings.Contains(body, "INTERNAL_ERROR") {
+		t.Fatalf("a failed identities read: %d %s", code, body)
+	}
+	code, body, _ = getV2(NewPortableHandlers(&fakePortable{p: stored2()}, nil).WithFinality(&fakeFinality{rows: []database.FinalityAddendum{a}, err: errors.New("db down")}), proof.String(), nil)
 	if code != http.StatusInternalServerError || strings.Contains(body, "majors") || !strings.Contains(body, "INTERNAL_ERROR") {
 		t.Fatalf("a failed addenda read: %d %s", code, body)
 	}

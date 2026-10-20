@@ -38,6 +38,7 @@ const (
 	FinalityHeaderMismatch   = "finality_addendum_header_mismatch"
 	FinalityLegMismatch      = "finality_leg_mismatch"
 	FinalityMemberInDocument = "finality_member_stored_in_document"
+	FinalityEvidenceTooLarge = "finality_evidence_too_large"
 	FinalityStatusMalformed  = "finality_status_malformed"
 )
 

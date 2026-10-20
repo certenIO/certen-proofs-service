@@ -141,8 +141,23 @@ func TestFinalityRepositoryAgainstTheValidatorsTables(t *testing.T) {
 		t.Fatalf("head 2: %+v", heads[1])
 	}
 
+	// the identities (no evidence) and the evidence size are measured in the database, in seq order
+	ids, err := r.ListFinalityIdentities(ctx, proof)
+	if err != nil || len(ids) != 2 || ids[0].Seq != 1 || ids[0].Level != 3 || !bytes.Equal(ids[0].OwnHash, h1) || ids[1].Seq != 2 || ids[1].Level != 2 || !bytes.Equal(ids[1].OwnHash, h2) {
+		t.Fatalf("identities %+v %v", ids, err)
+	}
+	if n, err := r.FinalityEvidenceBytes(ctx, proof); err != nil || n != int64(len(long)+len(short)) {
+		t.Fatalf("evidence bytes %d %v, want %d", n, err, len(long)+len(short))
+	}
+
 	// a proof with none has none, and an unknown proof has none: an empty answer, not an error
 	for _, id := range []uuid.UUID{empty, unknown} {
+		if i, err := r.ListFinalityIdentities(ctx, id); err != nil || len(i) != 0 {
+			t.Fatalf("%v %v", i, err)
+		}
+		if n, err := r.FinalityEvidenceBytes(ctx, id); err != nil || n != 0 {
+			t.Fatalf("%d %v", n, err)
+		}
 		if a, err := r.ListFinalityAddenda(ctx, id); err != nil || len(a) != 0 {
 			t.Fatalf("%v %v", a, err)
 		}

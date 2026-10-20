@@ -14,13 +14,5 @@
     "original": "if doc[\"majors\"], err = json.Marshal(majors); err != nil",
     "mutated": "if doc[\"majors\"], err = json.Marshal(majors); false",
     "reason": "Pre-existing code of ComposePortable, moved unchanged. The error of json.Marshal(majors) is unreachable: every element is a json.RawMessage the loop above has just accepted with json.Valid, and Marshal fails on a RawMessage only when it is not valid JSON. With the guard off the same value is returned."
-  },
-  {
-    "file": "portable_handlers.go",
-    "function": "PortableHandlers.HandleGetProofV2",
-    "operator": "logic_swap",
-    "original": "err == nil && zw.Close() == nil",
-    "mutated": "err == nil || zw.Close() == nil",
-    "reason": "Pre-existing code (gzip of the body), unchanged. zw is a gzip.Writer over a bytes.Buffer: Write and Close on a bytes.Buffer never return an error, so both operands are always true and && and || agree on every execution."
   }
 ]

@@ -12,6 +12,7 @@ import (
 	"compress/gzip"
 	"context"
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -30,9 +31,49 @@ type portableStore interface {
 	GetPortableV2(ctx context.Context, proofID uuid.UUID) (*database.PortableV2, error)
 }
 
-// finalityStore is what composing the `finality` member needs of the database: the proof's addendum chain, in seq order.
+// finalityStore is what composing the `finality` member needs of the database: the identity of the proof's addenda (no evidence),
+// the size of their evidence (no evidence), and the addendum chain with its evidence, in seq order.
 type finalityStore interface {
+	ListFinalityIdentities(ctx context.Context, proofID uuid.UUID) ([]database.FinalityIdentity, error)
+	FinalityEvidenceBytes(ctx context.Context, proofID uuid.UUID) (int64, error)
 	ListFinalityAddenda(ctx context.Context, proofID uuid.UUID) ([]database.FinalityAddendum, error)
+}
+
+// MaxFinalityEvidenceBytes bounds the evidence the portable document may carry, summed over a proof's addenda. The evidence is
+// served as hex, so it doubles: 6 MiB of evidence is 12 MiB of the body, which leaves 4 MiB of the api-gateway's 16 MiB cap on
+// a downstream body (DOWNSTREAM_MAX_CONTENT_LENGTH) for the rest of the document and the JSON around it. A proof above the bound
+// is a named 500, never a truncated member: nothing is dropped to fit. The measured evidence is smaller (Base l1_posted about
+// 1 MB, Sepolia finalized 2.7 to 3.2 MB, Arbitrum finalized 0.1 to 4 MB); raising the bound is a change of this constant together
+// with the gateway's cap.
+const MaxFinalityEvidenceBytes int64 = 6 << 20
+
+// finalityETag is the entity tag of a document with the given base (the document without its finality member): the base's own
+// hash when the proof has no addenda, so a document without the member keeps the tag it always had, and otherwise a hash of that
+// base, the proof and the identity of every addendum, so it can be computed without reading any evidence.
+func finalityETag(base [32]byte, proofID uuid.UUID, ids []database.FinalityIdentity) string {
+	if len(ids) == 0 {
+		return `"` + hex.EncodeToString(base[:]) + `"`
+	}
+	h := sha256.New()
+	h.Write([]byte("certen:proof-v2-etag:finality/1\n"))
+	h.Write(base[:])
+	h.Write(proofID[:])
+	for _, id := range ids {
+		var b [9]byte
+		binary.BigEndian.PutUint64(b[:8], uint64(id.Seq))
+		b[8] = byte(id.Level)
+		h.Write(b[:])
+		h.Write(id.OwnHash)
+	}
+	return `"` + hex.EncodeToString(h.Sum(nil)) + `"`
+}
+
+func identitiesOf(rows []database.FinalityAddendum) []database.FinalityIdentity {
+	out := make([]database.FinalityIdentity, len(rows))
+	for i, r := range rows {
+		out[i] = database.FinalityIdentity{Seq: r.Seq, Level: r.Level, OwnHash: r.OwnHash}
+	}
+	return out
 }
 
 // PortableHandlers serves portable proof v2 documents.
@@ -133,25 +174,13 @@ func (h *PortableHandlers) HandleGetProofV2(w http.ResponseWriter, r *http.Reque
 		writeJSONError(w, http.StatusNotFound, "PROOF_V2_NOT_AVAILABLE", fmt.Sprintf("No proof v2 document for proof %s", proofID))
 		return
 	}
-	var section json.RawMessage
-	if h.finality != nil {
-		rows, err := h.finality.ListFinalityAddenda(r.Context(), proofID)
-		if err != nil {
-			h.logger.Printf("finality addenda of %s: %v", proofID, err)
-			writeJSONError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to retrieve the finality addenda")
-			return
-		}
-		if section, err = ComposeFinalitySection(proofID, rows); err != nil {
-			h.logger.Printf("finality addenda of %s do not compose: %v", proofID, err)
-			writeJSONError(w, http.StatusInternalServerError, "FINALITY_SECTION_UNUSABLE", err.Error())
-			return
-		}
-	}
-	body, err := ComposePortableWithFinality(p, section)
+	// The document without its finality member first: it is what the tag is built on, and it is refused here when the stored document
+	// carries a finality member of its own.
+	base, err := ComposePortable(p)
 	if err != nil {
 		var named *FinalityComposeError
 		if errors.As(err, &named) {
-			h.logger.Printf("portable proof v2 %s does not compose: %v", proofID, err)
+			h.logger.Printf("FINALITY_SECTION_UNUSABLE proof=%s %v", proofID, err)
 			writeJSONError(w, http.StatusInternalServerError, "FINALITY_SECTION_UNUSABLE", err.Error())
 			return
 		}
@@ -159,9 +188,19 @@ func (h *PortableHandlers) HandleGetProofV2(w http.ResponseWriter, r *http.Reque
 		writeJSONError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "The stored proof v2 document is not usable")
 		return
 	}
-
-	sum := sha256.Sum256(body)
-	etag := `"` + hex.EncodeToString(sum[:]) + `"`
+	baseSum := sha256.Sum256(base)
+	etag := finalityETag(baseSum, proofID, nil)
+	var ids []database.FinalityIdentity
+	if h.finality != nil {
+		// The tag comes from what is stored about the addenda (their identities), not from the composed body, so a matching
+		// If-None-Match is answered without reading any evidence.
+		if ids, err = h.finality.ListFinalityIdentities(r.Context(), proofID); err != nil {
+			h.logger.Printf("finality addenda of %s: %v", proofID, err)
+			writeJSONError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to retrieve the finality addenda")
+			return
+		}
+		etag = finalityETag(baseSum, proofID, ids)
+	}
 	w.Header().Set("ETag", etag)
 	w.Header().Set("Content-Type", "application/json")
 	// The document changes when it is rebuilt and when an addendum is appended to its `finality` member (a level is reached later
@@ -172,6 +211,40 @@ func (h *PortableHandlers) HandleGetProofV2(w http.ResponseWriter, r *http.Reque
 	if r.Header.Get("If-None-Match") == etag {
 		w.WriteHeader(http.StatusNotModified)
 		return
+	}
+	body := base
+	if h.finality != nil && len(ids) > 0 {
+		n, err := h.finality.FinalityEvidenceBytes(r.Context(), proofID)
+		if err != nil {
+			h.logger.Printf("finality evidence size of %s: %v", proofID, err)
+			writeJSONError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to retrieve the finality addenda")
+			return
+		}
+		if n > MaxFinalityEvidenceBytes {
+			tooLarge := finalityErr(FinalityEvidenceTooLarge, "bytes", fmt.Sprintf("%d", n), "limit", fmt.Sprintf("%d", MaxFinalityEvidenceBytes))
+			h.logger.Printf("FINALITY_SECTION_UNUSABLE proof=%s %v", proofID, tooLarge)
+			writeJSONError(w, http.StatusInternalServerError, "FINALITY_SECTION_UNUSABLE", tooLarge.Error())
+			return
+		}
+		rows, err := h.finality.ListFinalityAddenda(r.Context(), proofID)
+		if err != nil {
+			h.logger.Printf("finality addenda of %s: %v", proofID, err)
+			writeJSONError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to retrieve the finality addenda")
+			return
+		}
+		section, err := ComposeFinalitySection(proofID, rows)
+		if err != nil {
+			h.logger.Printf("FINALITY_SECTION_UNUSABLE proof=%s %v", proofID, err)
+			writeJSONError(w, http.StatusInternalServerError, "FINALITY_SECTION_UNUSABLE", err.Error())
+			return
+		}
+		if body, err = ComposePortableWithFinality(p, section); err != nil {
+			h.logger.Printf("FINALITY_SECTION_UNUSABLE proof=%s %v", proofID, err)
+			writeJSONError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "The stored proof v2 document is not usable")
+			return
+		}
+		// An addendum appended between the two reads is in the body: the tag names what was served.
+		w.Header().Set("ETag", finalityETag(baseSum, proofID, identitiesOf(rows)))
 	}
 	if strings.Contains(r.Header.Get("Accept-Encoding"), "gzip") {
 		var buf bytes.Buffer

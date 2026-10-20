@@ -31,7 +31,7 @@ const finalityStatusFormat = "certen-finality-status/1"
 
 // The states a level can be reported in. present: an addendum is stored. pending, unavailable, refused, not_applicable: the
 // builder's stored judgement (class). derived: `included`, never stored. not_judged: the builder has recorded nothing for this
-// level yet. status_verified_without_addendum: the status row says the level was stored but no addendum row exists.
+// level yet. status_stored_without_addendum: the status row says the level was stored but no addendum row exists.
 const (
 	LevelStatePresent        = "present"
 	LevelStatePending        = "pending"
@@ -40,7 +40,7 @@ const (
 	LevelStateNotApplicable  = "not_applicable"
 	LevelStateDerived        = "derived"
 	LevelStateNotJudged      = "not_judged"
-	LevelStateVerifiedNoRow  = "status_verified_without_addendum"
+	LevelStateStoredNoRow    = "status_stored_without_addendum"
 	includedBasisDescription = "derived from the proof's own settlement evidence (S6); never stored as an addendum and not checked by this service"
 )
 
@@ -121,7 +121,7 @@ func levelFromStatus(level string, row database.FinalityStatus) (FinalityLevelSt
 	case "not_applicable":
 		state = LevelStateNotApplicable
 	case "verified":
-		state = LevelStateVerifiedNoRow
+		state = LevelStateStoredNoRow
 	default:
 		return FinalityLevelState{}, statusMalformed(level, "unknown_class")
 	}
@@ -140,7 +140,7 @@ func levelFromStatus(level string, row database.FinalityStatus) (FinalityLevelSt
 	hasState := len(d.State) > 0 && !bytes.Equal(bytes.TrimSpace(d.State), []byte("null"))
 	switch {
 	case d.Class == "verified" && hasState:
-		return FinalityLevelState{}, statusMalformed(level, "verified_carries_state")
+		return FinalityLevelState{}, statusMalformed(level, "stored_carries_state")
 	case d.Class != "verified" && !hasState:
 		return FinalityLevelState{}, statusMalformed(level, "state_missing")
 	case hasState:
@@ -269,22 +269,27 @@ func (h *FinalityHandlers) HandleGetProofFinality(w http.ResponseWriter, r *http
 		writeJSONError(w, http.StatusNotFound, "PROOF_NOT_FOUND", fmt.Sprintf("No proof found with ID: %s", proofID))
 		return
 	}
-	heads, err := h.store.ListFinalityAddendumHeads(r.Context(), proofID)
-	if err != nil {
-		h.logger.Printf("finality addenda of %s: %v", proofID, err)
-		writeJSONError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to retrieve the finality addenda")
-		return
-	}
+	// The status rows are read BEFORE the addendum heads. The validators commit an addendum and then, separately, the status row
+	// that says it is stored; read in this order a status row that says "stored" implies a head that is already visible, so a
+	// commit between the two reads cannot show the builder's own bookkeeping as a disagreement between their records. (The other
+	// race, a head appearing after an older status was read, only shows a stored level beside a stale status, and a stored level
+	// wins.)
 	statuses, err := h.store.ListFinalityStatus(r.Context(), proofID)
 	if err != nil {
 		h.logger.Printf("finality status of %s: %v", proofID, err)
 		writeJSONError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to retrieve the finality status")
 		return
 	}
+	heads, err := h.store.ListFinalityAddendumHeads(r.Context(), proofID)
+	if err != nil {
+		h.logger.Printf("finality addenda of %s: %v", proofID, err)
+		writeJSONError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to retrieve the finality addenda")
+		return
+	}
 	summary, err := SummarizeFinality(proofID, heads, statuses)
 	if err != nil {
 		// SummarizeFinality returns only named states (FinalityComposeError); the text carries the code and the seq or level.
-		h.logger.Printf("finality of %s does not summarise: %v", proofID, err)
+		h.logger.Printf("FINALITY_SUMMARY_UNUSABLE proof=%s %v", proofID, err)
 		writeJSONError(w, http.StatusInternalServerError, "FINALITY_SUMMARY_UNUSABLE", err.Error())
 		return
 	}

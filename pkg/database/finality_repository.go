@@ -47,6 +47,14 @@ type FinalityAddendumHead struct {
 	CreatedAt   time.Time
 }
 
+// FinalityIdentity names a stored addendum without its evidence: its place in the chain, its level and its chain hash. own_hash
+// commits to the evidence (sha256 of it is one of its preimage fields), so these three identify what the row holds.
+type FinalityIdentity struct {
+	Seq     int64
+	Level   int16
+	OwnHash []byte
+}
+
 // FinalityStatus is one row of proof_finality_status. State is the stored jsonb document (certen-finality-status/1) exactly as
 // the validator wrote it.
 type FinalityStatus struct {
@@ -79,6 +87,36 @@ func (r *ProofArtifactRepository) ListFinalityAddenda(ctx context.Context, proof
 		return nil, err
 	}
 	return out, nil
+}
+
+// ListFinalityIdentities returns the identity of each of a proof's addenda in seq order, without reading any evidence.
+func (r *ProofArtifactRepository) ListFinalityIdentities(ctx context.Context, proofID uuid.UUID) ([]FinalityIdentity, error) {
+	rows, err := r.db.QueryContext(ctx, `SELECT seq, level, own_hash FROM proof_finality_addenda WHERE proof_id = $1 ORDER BY seq`, proofID)
+	if err != nil {
+		return nil, fmt.Errorf("read the finality addendum identities: %w", err)
+	}
+	defer rows.Close()
+	var out []FinalityIdentity
+	for rows.Next() {
+		var id FinalityIdentity
+		if err := rows.Scan(&id.Seq, &id.Level, &id.OwnHash); err != nil {
+			return nil, fmt.Errorf("read a finality addendum identity: %w", err)
+		}
+		out = append(out, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// FinalityEvidenceBytes is the total size of the evidence of a proof's addenda, measured in the database without reading it.
+func (r *ProofArtifactRepository) FinalityEvidenceBytes(ctx context.Context, proofID uuid.UUID) (int64, error) {
+	var n int64
+	if err := r.db.QueryRowContext(ctx, `SELECT COALESCE(SUM(octet_length(evidence)), 0)::bigint FROM proof_finality_addenda WHERE proof_id = $1`, proofID).Scan(&n); err != nil {
+		return 0, fmt.Errorf("measure the finality evidence: %w", err)
+	}
+	return n, nil
 }
 
 // ListFinalityAddendumHeads is ListFinalityAddenda without the evidence bodies.

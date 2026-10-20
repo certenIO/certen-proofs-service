@@ -23,6 +23,12 @@ type fakeSummaryStore struct {
 	statuses []database.FinalityStatus
 	statusEr error
 	asked    []uuid.UUID
+
+	// lateHeads are committed by the validator between the two reads: visible to the heads read only once the status rows have
+	// been read.
+	lateHeads  []database.FinalityAddendumHead
+	statusRead bool
+	order      []string
 }
 
 func (f *fakeSummaryStore) ProofExists(_ context.Context, id uuid.UUID) (bool, error) {
@@ -30,9 +36,15 @@ func (f *fakeSummaryStore) ProofExists(_ context.Context, id uuid.UUID) (bool, e
 	return f.exists, f.existsEr
 }
 func (f *fakeSummaryStore) ListFinalityAddendumHeads(context.Context, uuid.UUID) ([]database.FinalityAddendumHead, error) {
+	f.order = append(f.order, "heads")
+	if f.statusRead {
+		return append(append([]database.FinalityAddendumHead(nil), f.heads...), f.lateHeads...), f.headsEr
+	}
 	return f.heads, f.headsEr
 }
 func (f *fakeSummaryStore) ListFinalityStatus(context.Context, uuid.UUID) ([]database.FinalityStatus, error) {
+	f.order = append(f.order, "status")
+	f.statusRead = true
 	return f.statuses, f.statusEr
 }
 
@@ -182,7 +194,7 @@ func TestEveryBuilderClassIsReportedByItsOwnName(t *testing.T) {
 	// the builder says it stored a level but there is no addendum row: named, never shown as present
 	verified := `{"format":"certen-finality-status/1","class":"verified","levelReached":"finalized","nextLevel":"finalized","seq":2}`
 	s, err := SummarizeFinality(proof, nil, []database.FinalityStatus{statusRow(proof, 84532, 3, verified)})
-	if err != nil || s.Levels.Finalized.State != LevelStateVerifiedNoRow || s.Levels.Finalized.Seq != 2 || s.Levels.Finalized.Reason != nil || s.RecordedLevel != "included" {
+	if err != nil || s.Levels.Finalized.State != LevelStateStoredNoRow || s.Levels.Finalized.Seq != 2 || s.Levels.Finalized.Reason != nil || s.RecordedLevel != "included" {
 		t.Fatalf("%+v %v", s, err)
 	}
 	// no eta stated stays unstated
@@ -231,7 +243,7 @@ func TestSummaryRefusesRowsItCannotSummariseByName(t *testing.T) {
 		{"status unknown level reached", nil, st(3, `{"format":"certen-finality-status/1","class":"pending","levelReached":"final","nextLevel":"finalized","state":{}}`), FinalityStatusMalformed, "reason", "unknown_level"},
 		{"status unknown next level", nil, st(3, `{"format":"certen-finality-status/1","class":"pending","levelReached":"none","nextLevel":"later","state":{}}`), FinalityStatusMalformed, "reason", "unknown_level"},
 		{"status bad eta", nil, st(3, `{"format":"certen-finality-status/1","class":"pending","levelReached":"none","nextLevel":"finalized","eta":"tomorrow","state":{}}`), FinalityStatusMalformed, "reason", "bad_eta"},
-		{"verified with a state", nil, st(3, `{"format":"certen-finality-status/1","class":"verified","levelReached":"finalized","nextLevel":"finalized","state":{}}`), FinalityStatusMalformed, "reason", "verified_carries_state"},
+		{"verified with a state", nil, st(3, `{"format":"certen-finality-status/1","class":"verified","levelReached":"finalized","nextLevel":"finalized","state":{}}`), FinalityStatusMalformed, "reason", "stored_carries_state"},
 		{"pending without a state", nil, st(3, `{"format":"certen-finality-status/1","class":"pending","levelReached":"none","nextLevel":"finalized"}`), FinalityStatusMalformed, "reason", "state_missing"},
 		{"pending with a null state", nil, st(3, `{"format":"certen-finality-status/1","class":"pending","levelReached":"none","nextLevel":"finalized","state":null}`), FinalityStatusMalformed, "reason", "state_missing"},
 		{"state not an object", nil, st(2, `{"format":"certen-finality-status/1","class":"pending","levelReached":"none","nextLevel":"l1_posted","state":[1]}`), FinalityStatusMalformed, "reason", "state_not_an_object"},

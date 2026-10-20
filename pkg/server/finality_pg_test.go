@@ -103,6 +103,17 @@ func TestFinalityEndToEndOverTheValidatorsTables(t *testing.T) {
 		t.Fatalf("the served document lacks the golden member:\n%s", rr.Body)
 	}
 
+	// the tag is built from the stored identities: a matching If-None-Match is 304 over the real tables too
+	etag := rr.Header().Get("ETag")
+	if etag == "" || get(handler, proof.String(), map[string]string{"If-None-Match": etag}).Code != http.StatusNotModified {
+		t.Fatalf("revalidation with %q", etag)
+	}
+	// the evidence size is measured by the database against the bound
+	n, err := repo.FinalityEvidenceBytes(ctx, proof)
+	if err != nil || n <= 0 || n > MaxFinalityEvidenceBytes {
+		t.Fatalf("evidence bytes %d %v", n, err)
+	}
+
 	// the summary over the same rows, with the builder's status for nothing else to report
 	fin := NewFinalityHandlers(repo, nil)
 	rec := httptest.NewRecorder()

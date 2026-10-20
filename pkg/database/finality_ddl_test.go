@@ -112,3 +112,75 @@ func TestFinalityColumnSetsMatchThePinnedLists(t *testing.T) {
 		}
 	}
 }
+
+// requiredFinalityMigrations are the versions this service's SQL needs beyond the old catalogue, with the sha256 of the validator
+// file of each (certen-validator origin/pv2/rb11-int and origin/main for 00026; the same hashes the copies are pinned to).
+var requiredFinalityMigrations = map[string]string{
+	"00026": "3c8aab92e4d5bede91b245121f18e7f29459f987e816237d1ce4c0b0357324f8",
+	"00027": migration00027SHA256,
+	"00028": migration00028SHA256,
+}
+
+func requiredSchemaMap() map[string]string {
+	m := map[string]string{}
+	for _, v := range RequiredSchema {
+		m[v.Version] = v.SHA256
+	}
+	return m
+}
+
+func TestRequiredSchemaPinsTheMigrationsTheFinalityQueriesNeed(t *testing.T) {
+	have := requiredSchemaMap()
+	for version, sum := range requiredFinalityMigrations {
+		if have[version] != sum {
+			t.Errorf("RequiredSchema[%s] = %q, want %q", version, have[version], sum)
+		}
+	}
+	// and the table is still ordered, which the startup check and its error messages rely on
+	last := ""
+	for _, v := range RequiredSchema {
+		if v.Version <= last {
+			t.Fatalf("RequiredSchema out of order at %s", v.Version)
+		}
+		last = v.Version
+	}
+	if last != "00028" {
+		t.Fatalf("the newest pinned migration is %s", last)
+	}
+}
+
+// The startup check is checkSchemaHistory over RequiredSchema (VerifySharedSchema). A database that predates any of the
+// finality migrations, or holds another file under their versions, must be refused, not served from.
+func TestAnUnmigratedDatabaseIsRefusedAtStartup(t *testing.T) {
+	complete := requiredSchemaMap()
+	if err := checkSchemaHistory(complete, RequiredSchema); err != nil {
+		t.Fatalf("a migrated database was refused: %v", err)
+	}
+	for _, version := range []string{"00026", "00027", "00028"} {
+		missing := requiredSchemaMap()
+		delete(missing, version)
+		err := checkSchemaHistory(missing, RequiredSchema)
+		if err == nil || !strings.Contains(err.Error(), "migration "+version+" is not applied") {
+			t.Errorf("without %s: %v", version, err)
+		}
+		edited := requiredSchemaMap()
+		edited[version] = strings.Repeat("0", 64)
+		err = checkSchemaHistory(edited, RequiredSchema)
+		if err == nil || !strings.Contains(err.Error(), "migration "+version+" has checksum") {
+			t.Errorf("edited %s: %v", version, err)
+		}
+	}
+	// the catalogue before the finality migrations (up to 00014, then 00026 only) is refused at 00027, the first one it lacks
+	older := requiredSchemaMap()
+	delete(older, "00027")
+	delete(older, "00028")
+	if err := checkSchemaHistory(older, RequiredSchema); err == nil || !strings.Contains(err.Error(), "migration 00027 is not applied") {
+		t.Errorf("a database at 00026: %v", err)
+	}
+	// newer migrations than this service requires are expected during a rolling deploy
+	newer := requiredSchemaMap()
+	newer["00029"] = "ab"
+	if err := checkSchemaHistory(newer, RequiredSchema); err != nil {
+		t.Errorf("a newer database was refused: %v", err)
+	}
+}
