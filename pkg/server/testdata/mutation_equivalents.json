@@ -1,0 +1,26 @@
+[
+  {
+    "file": "finality_handlers.go",
+    "function": "FinalityHandlers.HandleGetProofFinality",
+    "operator": "guard_off",
+    "original": "if err != nil",
+    "mutated": "if false",
+    "reason": "The error of json.Marshal(summary) is unreachable: the summary is a struct of strings, integers, a nullable leg and json.RawMessage members, and the only RawMessage (Reason) is a value that json.Decoder already decoded and validated as an object in levelFromStatus. With the guard off the same body is written. The guard stays as the defence in depth of the last encoding step; every other error guard of the handler is killed by a test."
+  },
+  {
+    "file": "portable_handlers.go",
+    "function": "ComposePortableWithFinality",
+    "operator": "guard_off",
+    "original": "if doc[\"majors\"], err = json.Marshal(majors); err != nil",
+    "mutated": "if doc[\"majors\"], err = json.Marshal(majors); false",
+    "reason": "Pre-existing code of ComposePortable, moved unchanged. The error of json.Marshal(majors) is unreachable: every element is a json.RawMessage the loop above has just accepted with json.Valid, and Marshal fails on a RawMessage only when it is not valid JSON. With the guard off the same value is returned."
+  },
+  {
+    "file": "portable_handlers.go",
+    "function": "PortableHandlers.HandleGetProofV2",
+    "operator": "logic_swap",
+    "original": "err == nil && zw.Close() == nil",
+    "mutated": "err == nil || zw.Close() == nil",
+    "reason": "Pre-existing code (gzip of the body), unchanged. zw is a gzip.Writer over a bytes.Buffer: Write and Close on a bytes.Buffer never return an error, so both operands are always true and && and || agree on every execution."
+  }
+]

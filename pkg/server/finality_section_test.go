@@ -274,7 +274,8 @@ func TestAHeaderThatDisagreesWithItsOwnRowIsRefusedByName(t *testing.T) {
 	}{
 		"kind":                      {func(a *database.FinalityAddendum) { a.Kind = "base-sepolia/l1_posted/v1" }, FinalityHeaderMismatch, "kind", ""},
 		"chain":                     {func(a *database.FinalityAddendum) { a.Chain = 11155111 }, FinalityHeaderMismatch, "chain", ""},
-		"negative chain":            {func(a *database.FinalityAddendum) { a.Chain = -1 }, FinalityHeaderMismatch, "chain", ""},
+		"negative chain":            {func(a *database.FinalityAddendum) { a.Chain = -1 }, FinalityRowInvalid, "chain", ""},
+		"chain zero":                {func(a *database.FinalityAddendum) { a.Chain = 0 }, FinalityRowInvalid, "chain", ""},
 		"level":                     {func(a *database.FinalityAddendum) { a.Level = 2 }, FinalityHeaderMismatch, "level", ""},
 		"magic":                     {func(a *database.FinalityAddendum) { a.Evidence[0] = 'X' }, FinalityHeaderMalformed, "", "magic"},
 		"shorter than the magic":    {func(a *database.FinalityAddendum) { a.Evidence = a.Evidence[:3] }, FinalityHeaderMalformed, "", "magic"},

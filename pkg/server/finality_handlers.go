@@ -12,7 +12,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -146,7 +145,7 @@ func levelFromStatus(level string, row database.FinalityStatus) (FinalityLevelSt
 		return FinalityLevelState{}, statusMalformed(level, "state_missing")
 	case hasState:
 		var obj map[string]json.RawMessage
-		if json.Unmarshal(d.State, &obj) != nil || obj == nil {
+		if json.Unmarshal(d.State, &obj) != nil {
 			return FinalityLevelState{}, statusMalformed(level, "state_not_an_object")
 		}
 		out.Reason = d.State
@@ -284,14 +283,9 @@ func (h *FinalityHandlers) HandleGetProofFinality(w http.ResponseWriter, r *http
 	}
 	summary, err := SummarizeFinality(proofID, heads, statuses)
 	if err != nil {
-		var named *FinalityComposeError
-		if errors.As(err, &named) {
-			h.logger.Printf("finality of %s does not summarise: %v", proofID, err)
-			writeJSONError(w, http.StatusInternalServerError, "FINALITY_SUMMARY_UNUSABLE", err.Error())
-			return
-		}
-		h.logger.Printf("finality of %s: %v", proofID, err)
-		writeJSONError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "The stored finality records are not usable")
+		// SummarizeFinality returns only named states (FinalityComposeError); the text carries the code and the seq or level.
+		h.logger.Printf("finality of %s does not summarise: %v", proofID, err)
+		writeJSONError(w, http.StatusInternalServerError, "FINALITY_SUMMARY_UNUSABLE", err.Error())
 		return
 	}
 	body, err := json.Marshal(summary)

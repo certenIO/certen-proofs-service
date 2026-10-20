@@ -141,6 +141,9 @@ type finalityHeadFacts struct {
 func legOfRows(rows []finalityHeadFacts) (finalityLeg, error) {
 	var leg finalityLeg
 	for i, r := range rows {
+		if r.Chain <= 0 {
+			return leg, finalityErr(FinalityRowInvalid, "seq", seqStr(r.Seq), "field", "chain")
+		}
 		h, bad := parseCFE1Header(r.Header)
 		if bad != "" {
 			return leg, finalityErr(FinalityHeaderMalformed, "seq", seqStr(r.Seq), "reason", bad)
@@ -148,7 +151,7 @@ func legOfRows(rows []finalityHeadFacts) (finalityLeg, error) {
 		if h.Kind != r.Kind {
 			return leg, finalityErr(FinalityHeaderMismatch, "seq", seqStr(r.Seq), "field", "kind")
 		}
-		if r.Chain < 0 || h.Chain != uint64(r.Chain) {
+		if h.Chain != uint64(r.Chain) {
 			return leg, finalityErr(FinalityHeaderMismatch, "seq", seqStr(r.Seq), "field", "chain")
 		}
 		if int16(h.Level) != r.Level {
