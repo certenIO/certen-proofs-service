@@ -2,7 +2,8 @@
 //
 // GET /api/v1/proofs/{proof_id}/v2 serves a proof's portable proof v2 document (certen-proof-v2-accumulate-portable/1): everything
 // a verifier needs to check the Accumulate side of the proof offline, from the incarnation's genesis. The validators build and
-// store it; this composes it from the two stored parts and serves it. It is evidence, never a verdict: nothing here says verified.
+// store it; this composes it from the two stored parts, plus the staged finality addenda when there are any, and serves it. It is
+// evidence, never a verdict: nothing here says verified.
 
 package server
 
@@ -13,6 +14,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -28,10 +30,16 @@ type portableStore interface {
 	GetPortableV2(ctx context.Context, proofID uuid.UUID) (*database.PortableV2, error)
 }
 
+// finalityStore is what composing the `finality` member needs of the database: the proof's addendum chain, in seq order.
+type finalityStore interface {
+	ListFinalityAddenda(ctx context.Context, proofID uuid.UUID) ([]database.FinalityAddendum, error)
+}
+
 // PortableHandlers serves portable proof v2 documents.
 type PortableHandlers struct {
-	store  portableStore
-	logger *log.Logger
+	store    portableStore
+	finality finalityStore
+	logger   *log.Logger
 }
 
 // NewPortableHandlers returns the handlers over a store.
@@ -42,12 +50,30 @@ func NewPortableHandlers(store portableStore, logger *log.Logger) *PortableHandl
 	return &PortableHandlers{store: store, logger: logger}
 }
 
+// WithFinality makes the handler compose the document's `finality` member (V2_SPEC_S7 section 2.5) from the validators' addendum
+// rows at request time. Without it the member is never composed.
+func (h *PortableHandlers) WithFinality(store finalityStore) *PortableHandlers {
+	h.finality = store
+	return h
+}
+
 // ComposePortable puts the shared major blocks, and the govRoot v3 inputs when there are some, into a stored document. The
 // document keeps every other member exactly as the validator wrote it.
 func ComposePortable(p *database.PortableV2) ([]byte, error) {
+	return ComposePortableWithFinality(p, nil)
+}
+
+// ComposePortableWithFinality is ComposePortable plus the `finality` member, given as the JSON ComposeFinalitySection returned
+// (nil: the member is absent). The member is composed at request time and is never part of the stored document: a stored
+// document that carries its own `finality` key is refused, because serving it would present a claim this service did not compose
+// from the addendum rows.
+func ComposePortableWithFinality(p *database.PortableV2, finality json.RawMessage) ([]byte, error) {
 	var doc map[string]json.RawMessage
 	if err := json.Unmarshal([]byte(p.Document), &doc); err != nil {
 		return nil, fmt.Errorf("the stored document is not JSON: %w", err)
+	}
+	if _, stored := doc["finality"]; stored {
+		return nil, finalityErr(FinalityMemberInDocument)
 	}
 	if len(p.Spine) != p.Majors {
 		return nil, fmt.Errorf("the document needs %d major blocks, %d given", p.Majors, len(p.Spine))
@@ -68,6 +94,9 @@ func ComposePortable(p *database.PortableV2) ([]byte, error) {
 			return nil, fmt.Errorf("the stored govRoot v3 inputs are not JSON")
 		}
 		doc["govRootV3Inputs"] = json.RawMessage(p.GovRootInputs)
+	}
+	if finality != nil {
+		doc["finality"] = finality
 	}
 	return json.Marshal(doc)
 }
@@ -104,8 +133,28 @@ func (h *PortableHandlers) HandleGetProofV2(w http.ResponseWriter, r *http.Reque
 		writeJSONError(w, http.StatusNotFound, "PROOF_V2_NOT_AVAILABLE", fmt.Sprintf("No proof v2 document for proof %s", proofID))
 		return
 	}
-	body, err := ComposePortable(p)
+	var section json.RawMessage
+	if h.finality != nil {
+		rows, err := h.finality.ListFinalityAddenda(r.Context(), proofID)
+		if err != nil {
+			h.logger.Printf("finality addenda of %s: %v", proofID, err)
+			writeJSONError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to retrieve the finality addenda")
+			return
+		}
+		if section, err = ComposeFinalitySection(proofID, rows); err != nil {
+			h.logger.Printf("finality addenda of %s do not compose: %v", proofID, err)
+			writeJSONError(w, http.StatusInternalServerError, "FINALITY_SECTION_UNUSABLE", err.Error())
+			return
+		}
+	}
+	body, err := ComposePortableWithFinality(p, section)
 	if err != nil {
+		var named *FinalityComposeError
+		if errors.As(err, &named) {
+			h.logger.Printf("portable proof v2 %s does not compose: %v", proofID, err)
+			writeJSONError(w, http.StatusInternalServerError, "FINALITY_SECTION_UNUSABLE", err.Error())
+			return
+		}
 		h.logger.Printf("portable proof v2 %s does not compose: %v", proofID, err)
 		writeJSONError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "The stored proof v2 document is not usable")
 		return
@@ -115,8 +164,10 @@ func (h *PortableHandlers) HandleGetProofV2(w http.ResponseWriter, r *http.Reque
 	etag := `"` + hex.EncodeToString(sum[:]) + `"`
 	w.Header().Set("ETag", etag)
 	w.Header().Set("Content-Type", "application/json")
-	// A built document does not change except by being rebuilt, which changes its ETag; private because the route is authenticated.
-	w.Header().Set("Cache-Control", "private, max-age=3600")
+	// The document changes when it is rebuilt and when an addendum is appended to its `finality` member (a level is reached later
+	// than the proof); either changes its ETag, so a client revalidates with it instead of holding a document for an hour that may
+	// lack a level the validators have since recorded. Private because the route is authenticated.
+	w.Header().Set("Cache-Control", "private, no-cache")
 	w.Header().Set("Vary", "Accept-Encoding")
 	if r.Header.Get("If-None-Match") == etag {
 		w.WriteHeader(http.StatusNotModified)

@@ -172,7 +172,10 @@ func main() {
 	mux.HandleFunc("/api/v1/batches/", batchHandlers.HandleBatches)
 
 	// The portable proof v2 document: what a verifier needs to check the Accumulate side of a proof offline (RB7b-F30).
-	portableHandlers := server.NewPortableHandlers(repos.ProofArtifacts, logger)
+	// Its `finality` member (staged finality addenda, V2_SPEC_S7 2.5) is composed at request time from the validators' rows
+	// (certen-validator migrations 00027 and 00028), and GET .../finality summarises what they recorded per level.
+	portableHandlers := server.NewPortableHandlers(repos.ProofArtifacts, logger).WithFinality(repos.ProofArtifacts)
+	finalityHandlers := server.NewFinalityHandlers(repos.ProofArtifacts, logger)
 
 	// API v1 Proof Detail endpoints (with sub-paths)
 	mux.HandleFunc("/api/v1/proofs/", func(w http.ResponseWriter, r *http.Request) {
@@ -180,6 +183,8 @@ func main() {
 		switch {
 		case strings.HasSuffix(path, "/v2"):
 			portableHandlers.HandleGetProofV2(w, r)
+		case strings.HasSuffix(path, "/finality"):
+			finalityHandlers.HandleGetProofFinality(w, r)
 		case strings.HasSuffix(path, "/bundle/verify"):
 			bundleHandlers.HandleVerifyBundle(w, r)
 		case strings.HasSuffix(path, "/bundle"):
