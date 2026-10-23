@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -57,6 +58,11 @@ type FinalityLevelState struct {
 	ETA          string          `json:"eta,omitempty"`
 	Reason       json.RawMessage `json:"reason,omitempty"`
 	JudgedAt     string          `json:"judgedAt,omitempty"`
+	// PinsSHA256 is the identity (sha256, 64 lowercase hex) of the pins the builder judged this level under, when its status row
+	// records it (the additive pinsSha256 member of certen-finality-status/1). A consumer that verifies under the pins IT trusts can
+	// compare it with its own. Absent when the row records none; on a stored level only when the row is that addendum's own verified
+	// status. Additive and last: a summary of rows without it is byte for byte what it was.
+	PinsSHA256 string `json:"pinsSha256,omitempty"`
 }
 
 // FinalityLevels are the three levels in ladder order.
@@ -76,7 +82,8 @@ type FinalitySummary struct {
 	Levels        FinalityLevels `json:"levels"`
 }
 
-// statusDocument is the stored builder status (certen-finality-status/1), read strictly.
+// statusDocument is the stored builder status (certen-finality-status/1), read strictly: a member that is not listed here is
+// refused (DisallowUnknownFields). The members the validators add are added here, and validated, before they are written.
 type statusDocument struct {
 	Format       string          `json:"format"`
 	Class        string          `json:"class"`
@@ -85,6 +92,102 @@ type statusDocument struct {
 	ETA          string          `json:"eta"`
 	Seq          uint64          `json:"seq"`
 	State        json.RawMessage `json:"state"`
+	// PinsSHA256 is the additive member pinsSha256 (validator pkg/finality/status.go, pv2/rb11-dbfix): the sha256 of the pins the
+	// builder used, 64 lowercase hex, omitted by the writer when it holds none. It is kept raw so that a member that is present but
+	// null, empty or not a string is told from an absent one and refused by its own reason instead of being read as absent.
+	PinsSHA256 json.RawMessage `json:"pinsSha256"`
+}
+
+// The reasons a stored status document is refused besides the shape ones above. Each names the member it is about.
+const (
+	reasonBadPinsSHA256     = "bad_pins_sha256"
+	reasonBadAttempt        = "bad_attempt"
+	reasonBadNextAttemptAt  = "bad_next_attempt_at"
+	reasonNotAStatusDoc     = "not_a_status_document"
+	reasonWrongStatusFormat = "wrong_format"
+)
+
+// decodeStatus reads a stored status document strictly. The reason is empty when it decoded and carries the right format.
+func decodeStatus(raw []byte) (d statusDocument, reason string) {
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&d); err != nil {
+		return statusDocument{}, reasonNotAStatusDoc
+	}
+	if d.Format != finalityStatusFormat {
+		return statusDocument{}, reasonWrongStatusFormat
+	}
+	return d, ""
+}
+
+// pinsIdentity is the document's pins identity: ("", true) when the member is absent, (hex, true) when it is a JSON string of exactly
+// 64 lowercase hex characters, and ("", false) for anything else a writer could not have produced (null, "", a number, upper case,
+// a prefix, a different length).
+func pinsIdentity(raw json.RawMessage) (string, bool) {
+	if len(raw) == 0 {
+		return "", true
+	}
+	var s string
+	if err := json.Unmarshal(raw, &s); err != nil || len(s) != 64 {
+		return "", false
+	}
+	for i := 0; i < len(s); i++ {
+		if c := s[i]; !(c >= '0' && c <= '9' || c >= 'a' && c <= 'f') {
+			return "", false
+		}
+	}
+	return s, true
+}
+
+// backOffFieldsReason checks the two fields a failed ask adds to a status' named state (validator pv2/rb12-p0-live): attempt is the
+// decimal ordinal (1 or more, no sign, no leading zero, within uint64) of the failed ask, next_attempt_at an RFC 3339 time. They are
+// fields of the state, not members of the document, so they are validated where they appear and nowhere else; a state without
+// them, or whose fields are not an object, is read as it always was.
+func backOffFieldsReason(state map[string]json.RawMessage) string {
+	rawFields, ok := state["fields"]
+	if !ok {
+		return ""
+	}
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(rawFields, &fields) != nil {
+		return ""
+	}
+	if raw, ok := fields["attempt"]; ok {
+		var s string
+		if json.Unmarshal(raw, &s) != nil {
+			return reasonBadAttempt
+		}
+		n, err := strconv.ParseUint(s, 10, 64)
+		if err != nil || n == 0 || strconv.FormatUint(n, 10) != s {
+			return reasonBadAttempt
+		}
+	}
+	if raw, ok := fields["next_attempt_at"]; ok {
+		var s string
+		if json.Unmarshal(raw, &s) != nil {
+			return reasonBadNextAttemptAt
+		}
+		if _, err := time.Parse(time.RFC3339, s); err != nil {
+			return reasonBadNextAttemptAt
+		}
+	}
+	return ""
+}
+
+// pinsOfStoredLevel is the pins identity to show on a level that has an addendum. The level is present whatever its status row
+// says, so the row is only believed for this: it must be the VERIFIED status of this very addendum (class verified, the
+// addendum's seq) and carry a well-formed identity. Anything else (a stale pending row, another addendum's row, a malformed
+// document) shows no identity; it never changes the level or fails the summary.
+func pinsOfStoredLevel(row database.FinalityStatus, seq int64) string {
+	d, reason := decodeStatus(row.State)
+	if reason != "" || d.Class != "verified" || seq <= 0 || d.Seq != uint64(seq) {
+		return ""
+	}
+	pins, ok := pinsIdentity(d.PinsSHA256)
+	if !ok {
+		return ""
+	}
+	return pins
 }
 
 func validLevelOrNone(s string) bool {
@@ -101,14 +204,9 @@ func statusMalformed(level string, reason string) error {
 
 // levelFromStatus turns a stored status row into the level's reported state.
 func levelFromStatus(level string, row database.FinalityStatus) (FinalityLevelState, error) {
-	var d statusDocument
-	dec := json.NewDecoder(bytes.NewReader(row.State))
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(&d); err != nil {
-		return FinalityLevelState{}, statusMalformed(level, "not_a_status_document")
-	}
-	if d.Format != finalityStatusFormat {
-		return FinalityLevelState{}, statusMalformed(level, "wrong_format")
+	d, reason := decodeStatus(row.State)
+	if reason != "" {
+		return FinalityLevelState{}, statusMalformed(level, reason)
 	}
 	var state string
 	switch d.Class {
@@ -133,9 +231,13 @@ func levelFromStatus(level string, row database.FinalityStatus) (FinalityLevelSt
 			return FinalityLevelState{}, statusMalformed(level, "bad_eta")
 		}
 	}
+	pins, ok := pinsIdentity(d.PinsSHA256)
+	if !ok {
+		return FinalityLevelState{}, statusMalformed(level, reasonBadPinsSHA256)
+	}
 	out := FinalityLevelState{
 		State: state, Chain: row.Chain, LevelReached: d.LevelReached, NextLevel: d.NextLevel, ETA: d.ETA,
-		JudgedAt: row.JudgedAt.UTC().Format(time.RFC3339), Seq: int64(d.Seq),
+		JudgedAt: row.JudgedAt.UTC().Format(time.RFC3339), Seq: int64(d.Seq), PinsSHA256: pins,
 	}
 	hasState := len(d.State) > 0 && !bytes.Equal(bytes.TrimSpace(d.State), []byte("null"))
 	switch {
@@ -147,6 +249,9 @@ func levelFromStatus(level string, row database.FinalityStatus) (FinalityLevelSt
 		var obj map[string]json.RawMessage
 		if json.Unmarshal(d.State, &obj) != nil {
 			return FinalityLevelState{}, statusMalformed(level, "state_not_an_object")
+		}
+		if reason := backOffFieldsReason(obj); reason != "" {
+			return FinalityLevelState{}, statusMalformed(level, reason)
 		}
 		out.Reason = d.State
 	}
@@ -201,6 +306,7 @@ func SummarizeFinality(proofID uuid.UUID, heads []database.FinalityAddendumHead,
 			return nil, statusMalformed(fmt.Sprint(row.TargetLevel), "target_level")
 		}
 		if present[row.TargetLevel] {
+			target.PinsSHA256 = pinsOfStoredLevel(row, target.Seq)
 			continue
 		}
 		st, err := levelFromStatus(names[row.TargetLevel], row)
