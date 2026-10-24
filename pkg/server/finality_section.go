@@ -39,6 +39,8 @@ const (
 	FinalityLegMismatch      = "finality_leg_mismatch"
 	FinalityMemberInDocument = "finality_member_stored_in_document"
 	FinalityEvidenceTooLarge = "finality_evidence_too_large"
+	// PortableMemberCase: a stored portable document spells a member this service composes (majors, govRootV3Inputs) in another case.
+	PortableMemberCase = "portable_member_name_case"
 	FinalityStatusMalformed  = "finality_status_malformed"
 )
 

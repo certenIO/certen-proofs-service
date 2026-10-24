@@ -226,3 +226,68 @@ func TestAStoredFinalityMemberInAnyCaseIsRefused(t *testing.T) {
 		}
 	}
 }
+
+// Review D6 (RB12-OPS-C): the size is read in one statement and the rows in another; a row that grew in between must not be served
+// above the bound. The bound is asserted again on the rows that were read.
+func TestTheBoundIsAssertedAgainOnTheRowsThatWereRead(t *testing.T) {
+	proof := uuid.New()
+	each := int(MaxFinalityEvidenceBytes / 2)
+	mk := func(seq int64, level byte, kind string, size int) database.FinalityAddendum {
+		ev := make([]byte, size)
+		copy(ev, cfe1(kind, 84532, level, 47368146, 0x33))
+		return row(proof, seq, int16(level), 84532, kind, ev)
+	}
+	for _, c := range []struct {
+		name  string
+		extra int
+		ok    bool
+	}{{"the rows add up to exactly the bound", 0, true}, {"the rows add up to one byte over the bound", 1, false}} {
+		rows := []database.FinalityAddendum{mk(1, 2, "base-sepolia/l1_posted/v1", each), mk(2, 3, "base-sepolia/finalized/v1", each+c.extra)}
+		small := int64(10) // what the database reported before the rows grew
+		fin := &fakeFinality{rows: rows, bytes: &small}
+		sink := newSink()
+		serveV2(NewPortableHandlers(&fakePortable{p: stored2()}, nil).WithFinality(fin), proof, sink, nil)
+		if c.ok {
+			if sink.code != http.StatusOK || sink.n < 2*MaxFinalityEvidenceBytes {
+				t.Errorf("%s: %d, %d bytes", c.name, sink.code, sink.n)
+			}
+			continue
+		}
+		rr := httptest.NewRecorder()
+		serveV2(NewPortableHandlers(&fakePortable{p: stored2()}, nil).WithFinality(&fakeFinality{rows: rows, bytes: &small}), proof, rr, nil)
+		want := "bytes=" + itoa(MaxFinalityEvidenceBytes+1) + " limit=" + itoa(MaxFinalityEvidenceBytes)
+		if rr.Code != http.StatusInternalServerError || !strings.Contains(rr.Body.String(), "FINALITY_SECTION_UNUSABLE") ||
+			!strings.Contains(rr.Body.String(), "finality_evidence_too_large") || !strings.Contains(rr.Body.String(), want) || strings.Contains(rr.Body.String(), "majors") {
+			t.Errorf("%s: %d %.300s", c.name, rr.Code, rr.Body)
+		}
+	}
+}
+
+// Review (LOW): the members this service composes into the document are read by exact key; a stored member spelled in another case
+// (which a case-insensitive Go consumer would read, possibly after the composed one) is refused by name.
+func TestAStoredCaseVariantOfAComposedMemberIsRefused(t *testing.T) {
+	proof := uuid.New()
+	for _, c := range []struct{ spelling, member string }{
+		{"Majors", "majors"}, {"MAJORS", "majors"}, {"majorſ", "majors"}, // U+017F folds to s
+		{"govrootv3inputs", "govRootV3Inputs"}, {"GovRootV3Inputs", "govRootV3Inputs"}, {"GOVROOTV3INPUTS", "govRootV3Inputs"},
+	} {
+		p := stored2()
+		p.Document = strings.Replace(p.Document, "{", `{"`+c.spelling+`":1,`, 1)
+		rr := httptest.NewRecorder()
+		serveV2(NewPortableHandlers(&fakePortable{p: p}, nil), proof, rr, nil)
+		if rr.Code != http.StatusInternalServerError || !strings.Contains(rr.Body.String(), "portable_member_name_case") || !strings.Contains(rr.Body.String(), "member="+c.member) {
+			t.Errorf("%s: %d %.200s", c.spelling, rr.Code, rr.Body)
+		}
+		if strings.Contains(rr.Body.String(), c.spelling) {
+			t.Errorf("%s: the stored spelling is echoed", c.spelling)
+		}
+	}
+	// the exact spellings are what they always were
+	p := stored2()
+	p.Document = strings.Replace(p.Document, "{", `{"majors":[],`, 1)
+	rr := httptest.NewRecorder()
+	serveV2(NewPortableHandlers(&fakePortable{p: p}, nil), proof, rr, nil)
+	if rr.Code != http.StatusOK {
+		t.Errorf("an exact stored majors member is composed over, as before: %d %.200s", rr.Code, rr.Body)
+	}
+}

@@ -141,7 +141,7 @@ func TestEvidenceAboveTheBoundIsANamedRefusalNeverATruncation(t *testing.T) {
 	if MaxFinalityEvidenceBytes != 2*(64<<20) || MaxFinalityContainerBytes != 64<<20 {
 		t.Fatalf("the bound is %d", MaxFinalityEvidenceBytes)
 	}
-	// hex doubles the evidence: the api-gateway's cap on the document (PROOF_V2_MAX_BYTES in src/clients/proofs.client.ts) is the hex of
+	// hex doubles the evidence: the api-gateway's cap on the document (PROOF_V2_MAX_BYTES in src/clients/proof-v2-body.ts) is the hex of
 	// the bound plus the room for the rest of the document, and that sum is the figure the gateway pins
 	if got := 2*MaxFinalityEvidenceBytes + PortableRestAllowanceBytes; got != 285212672 {
 		t.Fatalf("the gateway's cap must be %d", got)

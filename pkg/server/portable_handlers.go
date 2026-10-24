@@ -146,6 +146,12 @@ func portableMembers(p *database.PortableV2) (map[string]json.RawMessage, error)
 		if strings.EqualFold(k, "finality") {
 			return nil, finalityErr(FinalityMemberInDocument)
 		}
+		// the same for the members composed here: the exact key is replaced by the composed one, another spelling would be read beside it
+		for _, composed := range []string{"majors", "govRootV3Inputs"} {
+			if k != composed && strings.EqualFold(k, composed) {
+				return nil, finalityErr(PortableMemberCase, "member", composed)
+			}
+		}
 	}
 	if len(p.Spine) != p.Majors {
 		return nil, fmt.Errorf("the document needs %d major blocks, %d given", p.Majors, len(p.Spine))
@@ -249,15 +255,23 @@ func (h *PortableHandlers) HandleGetProofV2(w http.ResponseWriter, r *http.Reque
 			return
 		}
 		if n > MaxFinalityEvidenceBytes {
-			tooLarge := finalityErr(FinalityEvidenceTooLarge, "bytes", fmt.Sprintf("%d", n), "limit", fmt.Sprintf("%d", MaxFinalityEvidenceBytes))
-			h.logger.Printf("FINALITY_SECTION_UNUSABLE proof=%s %v", proofID, tooLarge)
-			writeJSONError(w, http.StatusInternalServerError, "FINALITY_SECTION_UNUSABLE", tooLarge.Error())
+			h.refuseEvidenceTooLarge(w, proofID, n)
 			return
 		}
 		rows, err := h.finality.ListFinalityAddenda(r.Context(), proofID)
 		if err != nil {
 			h.logger.Printf("finality addenda of %s: %v", proofID, err)
 			writeJSONError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to retrieve the finality addenda")
+			return
+		}
+		// The size above and the rows here are two statements: a row appended between them is in the rows and not in the size. The
+		// bound is asserted again on what was read, before anything is composed or written.
+		var read int64
+		for _, a := range rows {
+			read += int64(len(a.Evidence))
+		}
+		if read > MaxFinalityEvidenceBytes {
+			h.refuseEvidenceTooLarge(w, proofID, read)
 			return
 		}
 		// Every refusal happens here, before the first byte of the body: once the status is written a failure can only abort the response.
@@ -302,6 +316,13 @@ func (h *PortableHandlers) HandleGetProofV2(w http.ResponseWriter, r *http.Reque
 		h.logger.Printf("portable proof v2 %s: the body could not be written, the response is aborted: %v", proofID, err)
 		panic(http.ErrAbortHandler)
 	}
+}
+
+// refuseEvidenceTooLarge answers the named 500 for evidence above the bound.
+func (h *PortableHandlers) refuseEvidenceTooLarge(w http.ResponseWriter, proofID uuid.UUID, n int64) {
+	tooLarge := finalityErr(FinalityEvidenceTooLarge, "bytes", fmt.Sprintf("%d", n), "limit", fmt.Sprintf("%d", MaxFinalityEvidenceBytes))
+	h.logger.Printf("FINALITY_SECTION_UNUSABLE proof=%s %v", proofID, tooLarge)
+	writeJSONError(w, http.StatusInternalServerError, "FINALITY_SECTION_UNUSABLE", tooLarge.Error())
 }
 
 func writeJSONError(w http.ResponseWriter, status int, code, message string) {

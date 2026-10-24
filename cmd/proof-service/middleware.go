@@ -17,13 +17,19 @@ import (
 )
 
 // recoverMiddleware turns a panic in the auth chain or any handler into a 500
-// instead of aborting the request mid-write. (A panic in a detached goroutine
+// instead of aborting the request mid-write (except http.ErrAbortHandler, which is an abort on purpose). (A panic in a detached goroutine
 // still needs its own recover — see the export goroutines.)
 func recoverMiddleware(logger *log.Logger) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			defer func() {
 				if rec := recover(); rec != nil {
+					// http.ErrAbortHandler is how a handler that has already sent its status (the portable proof v2 document) says that
+					// the body cannot be completed: net/http expects it to reach the server, which closes the connection. Answering it
+					// here would write a 500 that is ignored and an error body INTO the middle of the document.
+					if rec == http.ErrAbortHandler {
+						panic(rec)
+					}
 					logger.Printf("[panic] %s %s: %v", r.Method, r.URL.Path, rec)
 					w.Header().Set("Content-Type", "application/json")
 					w.WriteHeader(http.StatusInternalServerError)
