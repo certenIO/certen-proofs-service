@@ -291,3 +291,110 @@ func TestAStoredCaseVariantOfAComposedMemberIsRefused(t *testing.T) {
 		t.Errorf("an exact stored majors member is composed over, as before: %d %.200s", rr.Code, rr.Body)
 	}
 }
+
+// --- bounded concurrent serves of large documents (review V-OPS-C2, memory) ---------------------------------------------------------------
+
+// gatedSink is a ResponseWriter whose first body write announces itself and then waits to be released, so a serve can be held open.
+type gatedSink struct {
+	*sinkWriter
+	started chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func newGated() *gatedSink {
+	return &gatedSink{sinkWriter: newSink(), started: make(chan struct{}), release: make(chan struct{})}
+}
+
+func (g *gatedSink) Write(p []byte) (int, error) {
+	g.once.Do(func() { close(g.started) })
+	<-g.release
+	return g.sinkWriter.Write(p)
+}
+
+// A serve whose evidence is above LargeServeThresholdBytes costs about twice that in memory (the driver's buffer and the scanned copy), so
+// the number of them at once is bounded: the next is refused by name BEFORE any row is read, and a small document is never held back.
+func TestLargeServesAreBoundedAndTheNextIsRefusedByNameBeforeAnyRowIsRead(t *testing.T) {
+	proof, rows := twoRows(t)
+	big := LargeServeThresholdBytes + 1
+	fin := &fakeFinality{rows: rows, bytes: &big}
+	h := NewPortableHandlers(&fakePortable{p: stored2()}, nil).WithFinality(fin).WithLargeServeLimit(2)
+
+	var wg sync.WaitGroup
+	hold := func() *gatedSink {
+		g := newGated()
+		wg.Add(1)
+		go func() { defer wg.Done(); serveV2(h, proof, g, nil) }()
+		select {
+		case <-g.started:
+		case <-time.After(10 * time.Second):
+			t.Fatal("a large serve did not start")
+		}
+		return g
+	}
+	g1, g2 := hold(), hold()
+	readsWhileFull := fin.evidenceReads
+
+	rr := httptest.NewRecorder()
+	serveV2(h, proof, rr, nil)
+	if rr.Code != http.StatusServiceUnavailable || !strings.Contains(rr.Body.String(), "PORTABLE_V2_BUSY") || !strings.Contains(rr.Body.String(), "portable_v2_busy limit=2") {
+		t.Fatalf("the third large serve: %d %s", rr.Code, rr.Body)
+	}
+	if rr.Header().Get("Retry-After") == "" {
+		t.Fatal("the refusal does not say when to retry")
+	}
+	if fin.evidenceReads != readsWhileFull {
+		t.Fatalf("the refused request read the evidence rows (%d reads, %d before)", fin.evidenceReads, readsWhileFull)
+	}
+
+	// a document whose evidence is small is not held back by the large ones (here the same handler, another size)
+	small := LargeServeThresholdBytes
+	fin2 := &fakeFinality{rows: rows, bytes: &small}
+	rr2 := httptest.NewRecorder()
+	serveV2(NewPortableHandlers(&fakePortable{p: stored2()}, nil).WithFinality(fin2).WithLargeServeLimit(2), proof, rr2, nil)
+	if rr2.Code != http.StatusOK {
+		t.Fatalf("a document at the threshold: %d", rr2.Code)
+	}
+
+	close(g1.release)
+	close(g2.release)
+	wg.Wait()
+	if g1.code != http.StatusOK || g2.code != http.StatusOK {
+		t.Fatalf("the held serves ended %d and %d", g1.code, g2.code)
+	}
+	rr3 := httptest.NewRecorder()
+	serveV2(h, proof, rr3, nil)
+	if rr3.Code != http.StatusOK {
+		t.Fatalf("after the serves ended the next is served: %d %.200s", rr3.Code, rr3.Body)
+	}
+}
+
+// A serve that is aborted (the status was sent, a write failed) gives its slot back: the limit does not leak.
+func TestAnAbortedLargeServeGivesItsSlotBack(t *testing.T) {
+	proof, rows := twoRows(t)
+	big := LargeServeThresholdBytes + 1
+	h := NewPortableHandlers(&fakePortable{p: stored2()}, nil).WithFinality(&fakeFinality{rows: rows, bytes: &big}).WithLargeServeLimit(1)
+	for i := 0; i < 3; i++ {
+		sink := newSink()
+		sink.failAfter = 100
+		func() {
+			defer func() {
+				if r := recover(); r != http.ErrAbortHandler {
+					t.Fatalf("serve %d ended with %v, want http.ErrAbortHandler", i, r)
+				}
+			}()
+			serveV2(h, proof, sink, nil)
+		}()
+	}
+	rr := httptest.NewRecorder()
+	serveV2(h, proof, rr, nil)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("after three aborted serves with a limit of one: %d %.200s", rr.Code, rr.Body)
+	}
+}
+
+func TestTheDefaultLimitOfLargeServesIsFour(t *testing.T) {
+	if DefaultLargeServeLimit != 4 || LargeServeThresholdBytes != 16<<20 {
+		t.Fatalf("limit %d, threshold %d", DefaultLargeServeLimit, LargeServeThresholdBytes)
+	}
+}

@@ -58,6 +58,14 @@ const MaxFinalityAddendaPerProof int64 = 2
 // together with the gateway's cap (and the validator's container bound, which it follows).
 const MaxFinalityEvidenceBytes int64 = MaxFinalityContainerBytes * MaxFinalityAddendaPerProof
 
+// LargeServeThresholdBytes is the evidence size above which a serve counts against the limit on concurrent large serves. Reading the rows
+// costs about twice their evidence in memory (the driver's message buffer and the scanned copy are both live: measured +256 MiB of heap
+// for a maximum-size document over lib/pq), the container has no memory limit, so the number of serves that big at once is bounded.
+const LargeServeThresholdBytes int64 = 16 << 20
+
+// DefaultLargeServeLimit is how many serves above LargeServeThresholdBytes run at once (PROOF_V2_LARGE_SERVES_MAX overrides it).
+const DefaultLargeServeLimit = 4
+
 // PortableRestAllowanceBytes is the room the gateway's cap leaves, beyond the hex of the evidence, for the rest of the document.
 const PortableRestAllowanceBytes int64 = 16 << 20
 
@@ -95,6 +103,7 @@ type PortableHandlers struct {
 	store    portableStore
 	finality finalityStore
 	logger   *log.Logger
+	large    chan struct{} // one token per large serve in progress; its capacity is the limit
 }
 
 // NewPortableHandlers returns the handlers over a store.
@@ -102,7 +111,16 @@ func NewPortableHandlers(store portableStore, logger *log.Logger) *PortableHandl
 	if logger == nil {
 		logger = log.New(log.Writer(), "[PortableAPI] ", log.LstdFlags)
 	}
-	return &PortableHandlers{store: store, logger: logger}
+	return &PortableHandlers{store: store, logger: logger, large: make(chan struct{}, DefaultLargeServeLimit)}
+}
+
+// WithLargeServeLimit sets how many serves above LargeServeThresholdBytes may run at once (at least 1). Call it before serving.
+func (h *PortableHandlers) WithLargeServeLimit(n int) *PortableHandlers {
+	if n < 1 {
+		n = 1
+	}
+	h.large = make(chan struct{}, n)
+	return h
 }
 
 // WithFinality makes the handler compose the document's `finality` member (V2_SPEC_S7 section 2.5) from the validators' addendum
@@ -257,6 +275,18 @@ func (h *PortableHandlers) HandleGetProofV2(w http.ResponseWriter, r *http.Reque
 		if n > MaxFinalityEvidenceBytes {
 			h.refuseEvidenceTooLarge(w, proofID, n)
 			return
+		}
+		if n > LargeServeThresholdBytes {
+			// admission before the rows are read: a refused request costs one size query
+			select {
+			case h.large <- struct{}{}:
+				defer func() { <-h.large }()
+			default:
+				h.logger.Printf("PORTABLE_V2_BUSY proof=%s evidence=%d limit=%d", proofID, n, cap(h.large))
+				w.Header().Set("Retry-After", "1")
+				writeJSONError(w, http.StatusServiceUnavailable, "PORTABLE_V2_BUSY", fmt.Sprintf("portable_v2_busy limit=%d", cap(h.large)))
+				return
+			}
 		}
 		rows, err := h.finality.ListFinalityAddenda(r.Context(), proofID)
 		if err != nil {
