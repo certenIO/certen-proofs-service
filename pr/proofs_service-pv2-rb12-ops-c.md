@@ -30,6 +30,24 @@ Also in this change, each with a test: the plain response declares its exact Con
 
 No migration, `RequiredSchema` unchanged. Responses for every existing document are byte-identical (the vector goldens). A status row a validator wrote can only be newly refused if it spells a member in a case the writer never uses.
 
+## Before deploying (read-only, owner/ops)
+
+The service newly refuses a status row that spells a member in another case than the validator writer does. The writer (`BuilderStatus.Document`) never does, so each of these counts is expected to be 0; they were run against sample rows in the shared test PostgreSQL (valid rows count 0, rows with a variant count 1 or 2) and can be run on the production database through a read-only session:
+
+```sql
+-- top-level members outside the contract
+SELECT count(*) FROM proof_finality_status s WHERE jsonb_typeof(s.state)='object'
+  AND EXISTS (SELECT 1 FROM jsonb_object_keys(s.state) k WHERE k NOT IN ('format','class','levelReached','nextLevel','eta','seq','state','pinsSha256'));
+-- named-state members outside code/fields
+SELECT count(*) FROM proof_finality_status s WHERE jsonb_typeof(s.state->'state')='object'
+  AND EXISTS (SELECT 1 FROM jsonb_object_keys(s.state->'state') k WHERE k NOT IN ('code','fields'));
+-- attempt / next_attempt_at spelled in another case
+SELECT count(*) FROM proof_finality_status s WHERE jsonb_typeof(s.state#>'{state,fields}')='object'
+  AND EXISTS (SELECT 1 FROM jsonb_object_keys(s.state#>'{state,fields}') k WHERE lower(k) IN ('attempt','next_attempt_at') AND k NOT IN ('attempt','next_attempt_at'));
+```
+
+These are not in the validator's `pr/rb11-prod-shape-check.sh` (validator code, out of scope here).
+
 ## Tests run
 
-`pv2gt.ps1 -Pkg ./pkg/server` (whole package) PASS; `go vet ./pkg/server ./cmd/...` clean.
+`pv2gt.ps1 -Pkg ./pkg/server` (whole package) PASS; `go test -tags pgtest ./pkg/server ./pkg/database` against the shared PostgreSQL (CERTEN_PG_SCRATCH_DB) PASS; `go vet ./pkg/server ./cmd/...` clean.
