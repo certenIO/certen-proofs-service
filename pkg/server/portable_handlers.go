@@ -8,7 +8,6 @@
 package server
 
 import (
-	"bytes"
 	"compress/gzip"
 	"context"
 	"crypto/sha256"
@@ -17,8 +16,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/google/uuid"
@@ -39,13 +40,26 @@ type finalityStore interface {
 	ListFinalityAddenda(ctx context.Context, proofID uuid.UUID) ([]database.FinalityAddendum, error)
 }
 
-// MaxFinalityEvidenceBytes bounds the evidence the portable document may carry, summed over a proof's addenda. The evidence is
-// served as hex, so it doubles: 6 MiB of evidence is 12 MiB of the body, which leaves 4 MiB of the api-gateway's 16 MiB cap on
-// a downstream body (DOWNSTREAM_MAX_CONTENT_LENGTH) for the rest of the document and the JSON around it. A proof above the bound
-// is a named 500, never a truncated member: nothing is dropped to fit. The measured evidence is smaller (Base l1_posted about
-// 1 MB, Sepolia finalized 2.7 to 3.2 MB, Arbitrum finalized 0.1 to 4 MB); raising the bound is a change of this constant together
-// with the gateway's cap.
-const MaxFinalityEvidenceBytes int64 = 6 << 20
+// MaxFinalityContainerBytes is the largest evidence container a verifier accepts: V2_SPEC_S7 section 8.2 "evidence container <= 64 MiB",
+// the validator's finality.DefaultLimits().MaxEvidenceBytes (pkg/finality/codec.go) and its TypeScript twin (codec.ts maxEvidenceBytes).
+// An Arbitrum finalized container at the pinned max_header_chain 32768 is about 18 MB and is legal; the bound is the container
+// bound, not a measured size.
+const MaxFinalityContainerBytes int64 = 64 << 20
+
+// MaxFinalityAddendaPerProof is how many addenda a proof can hold: one per stored level (l1_posted, finalized), the levels the
+// table's CHECK allows and SummarizeFinality enforces ("level_repeated").
+const MaxFinalityAddendaPerProof int64 = 2
+
+// MaxFinalityEvidenceBytes bounds the evidence the portable document may carry, summed over a proof's addenda: every legal
+// addendum can be served, so the bound is the container bound for each stored level (128 MiB). The evidence is served as hex, so it
+// doubles in the body (256 MiB), and PortableRestAllowanceBytes is room for the rest of the document and the JSON around it; the
+// api-gateway's cap on the document (PROOF_V2_MAX_BYTES) is exactly 2*MaxFinalityEvidenceBytes + PortableRestAllowanceBytes. A proof
+// above the bound is a named 500, never a truncated member: nothing is dropped to fit. Raising the bound is a change of this constant
+// together with the gateway's cap (and the validator's container bound, which it follows).
+const MaxFinalityEvidenceBytes int64 = MaxFinalityContainerBytes * MaxFinalityAddendaPerProof
+
+// PortableRestAllowanceBytes is the room the gateway's cap leaves, beyond the hex of the evidence, for the rest of the document.
+const PortableRestAllowanceBytes int64 = 16 << 20
 
 // finalityETag is the entity tag of a document with the given base (the document without its finality member): the base's own
 // hash when the proof has no addenda, so a document without the member keeps the tag it always had, and otherwise a hash of that
@@ -109,12 +123,29 @@ func ComposePortable(p *database.PortableV2) ([]byte, error) {
 // document that carries its own `finality` key is refused, because serving it would present a claim this service did not compose
 // from the addendum rows.
 func ComposePortableWithFinality(p *database.PortableV2, finality json.RawMessage) ([]byte, error) {
+	doc, err := portableMembers(p)
+	if err != nil {
+		return nil, err
+	}
+	if finality != nil {
+		doc["finality"] = finality
+	}
+	return json.Marshal(doc)
+}
+
+// portableMembers is the stored document with its composed members (majors, govRootV3Inputs) and without any finality member; a stored
+// document that carries a finality member of its own, in any case, is refused.
+func portableMembers(p *database.PortableV2) (map[string]json.RawMessage, error) {
 	var doc map[string]json.RawMessage
 	if err := json.Unmarshal([]byte(p.Document), &doc); err != nil {
 		return nil, fmt.Errorf("the stored document is not JSON: %w", err)
 	}
-	if _, stored := doc["finality"]; stored {
-		return nil, finalityErr(FinalityMemberInDocument)
+	for k := range doc {
+		// a member spelled in another case is not the finality member to this service, but the Go consumers of the document match
+		// member names case-insensitively and would read it as the claim this service did not compose
+		if strings.EqualFold(k, "finality") {
+			return nil, finalityErr(FinalityMemberInDocument)
+		}
 	}
 	if len(p.Spine) != p.Majors {
 		return nil, fmt.Errorf("the document needs %d major blocks, %d given", p.Majors, len(p.Spine))
@@ -136,10 +167,7 @@ func ComposePortableWithFinality(p *database.PortableV2, finality json.RawMessag
 		}
 		doc["govRootV3Inputs"] = json.RawMessage(p.GovRootInputs)
 	}
-	if finality != nil {
-		doc["finality"] = finality
-	}
-	return json.Marshal(doc)
+	return doc, nil
 }
 
 // HandleGetProofV2 serves GET /api/v1/proofs/{proof_id}/v2.
@@ -212,7 +240,7 @@ func (h *PortableHandlers) HandleGetProofV2(w http.ResponseWriter, r *http.Reque
 		w.WriteHeader(http.StatusNotModified)
 		return
 	}
-	body := base
+	body := portableBody{pieces: []bodyPiece{fixedPiece(base)}}
 	if h.finality != nil && len(ids) > 0 {
 		n, err := h.finality.FinalityEvidenceBytes(r.Context(), proofID)
 		if err != nil {
@@ -232,13 +260,14 @@ func (h *PortableHandlers) HandleGetProofV2(w http.ResponseWriter, r *http.Reque
 			writeJSONError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to retrieve the finality addenda")
 			return
 		}
-		section, err := ComposeFinalitySection(proofID, rows)
+		// Every refusal happens here, before the first byte of the body: once the status is written a failure can only abort the response.
+		section, err := newFinalitySectionStream(proofID, rows)
 		if err != nil {
 			h.logger.Printf("FINALITY_SECTION_UNUSABLE proof=%s %v", proofID, err)
 			writeJSONError(w, http.StatusInternalServerError, "FINALITY_SECTION_UNUSABLE", err.Error())
 			return
 		}
-		if body, err = ComposePortableWithFinality(p, section); err != nil {
+		if body, err = planPortable(p, section); err != nil {
 			h.logger.Printf("FINALITY_SECTION_UNUSABLE proof=%s %v", proofID, err)
 			writeJSONError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "The stored proof v2 document is not usable")
 			return
@@ -246,18 +275,33 @@ func (h *PortableHandlers) HandleGetProofV2(w http.ResponseWriter, r *http.Reque
 		// An addendum appended between the two reads is in the body: the tag names what was served.
 		w.Header().Set("ETag", finalityETag(baseSum, proofID, identitiesOf(rows)))
 	}
+	if err := extendWriteDeadline(w, body.Len()); err != nil {
+		h.logger.Printf("portable proof v2 %s: the write deadline cannot be set: %v", proofID, err)
+		writeJSONError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to serve the proof v2 document")
+		return
+	}
+	var dst io.Writer = w
+	var zw *gzip.Writer
 	if strings.Contains(r.Header.Get("Accept-Encoding"), "gzip") {
-		var buf bytes.Buffer
-		zw := gzip.NewWriter(&buf)
-		if _, err := zw.Write(body); err == nil && zw.Close() == nil {
-			w.Header().Set("Content-Encoding", "gzip")
-			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write(buf.Bytes())
-			return
-		}
+		// The compressed length is not known up front: the response is chunked.
+		w.Header().Set("Content-Encoding", "gzip")
+		zw = gzip.NewWriter(w)
+		dst = zw
+	} else {
+		// The exact length, so that a reader (the api-gateway) can refuse a body above its bound by name before reading it, and can tell a
+		// body that ended early from a complete one.
+		w.Header().Set("Content-Length", strconv.FormatInt(body.Len(), 10))
 	}
 	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write(body)
+	err = body.writeTo(dst)
+	if err == nil && zw != nil {
+		err = zw.Close()
+	}
+	if err != nil {
+		// The status is already sent: a body that cannot be completed is aborted (the connection is closed), never ended as if it were whole.
+		h.logger.Printf("portable proof v2 %s: the body could not be written, the response is aborted: %v", proofID, err)
+		panic(http.ErrAbortHandler)
+	}
 }
 
 func writeJSONError(w http.ResponseWriter, status int, code, message string) {
