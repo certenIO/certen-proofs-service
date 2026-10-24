@@ -17,6 +17,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -175,6 +176,14 @@ func main() {
 	// Its `finality` member (staged finality addenda, V2_SPEC_S7 2.5) is composed at request time from the validators' rows
 	// (certen-validator migrations 00027 and 00028), and GET .../finality summarises what they recorded per level.
 	portableHandlers := server.NewPortableHandlers(repos.ProofArtifacts, logger).WithFinality(repos.ProofArtifacts)
+	if v := os.Getenv("PROOF_V2_LARGE_SERVES_MAX"); v != "" {
+		// how many /v2 serves with more than server.LargeServeThresholdBytes of evidence run at once; a bad value stops the service at start
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 1 {
+			log.Fatalf("PROOF_V2_LARGE_SERVES_MAX must be a whole number of at least 1, got %q", v)
+		}
+		portableHandlers.WithLargeServeLimit(n)
+	}
 	finalityHandlers := server.NewFinalityHandlers(repos.ProofArtifacts, logger)
 
 	// API v1 Proof Detail endpoints (with sub-paths)

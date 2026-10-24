@@ -39,6 +39,8 @@ const (
 	FinalityLegMismatch      = "finality_leg_mismatch"
 	FinalityMemberInDocument = "finality_member_stored_in_document"
 	FinalityEvidenceTooLarge = "finality_evidence_too_large"
+	// PortableMemberCase: a stored portable document spells a member this service composes (majors, govRootV3Inputs) in another case.
+	PortableMemberCase = "portable_member_name_case"
 	FinalityStatusMalformed  = "finality_status_malformed"
 )
 
@@ -195,32 +197,46 @@ func ComposeFinalitySection(proofID uuid.UUID, rows []database.FinalityAddendum)
 	if len(rows) == 0 {
 		return nil, nil
 	}
-	facts := make([]finalityHeadFacts, len(rows))
-	section := finalitySectionJSON{Format: FinalitySectionFormat, Addenda: make([]finalityAddendumJSON, 0, len(rows))}
-	for i, r := range rows {
-		if r.ProofID != proofID {
-			return nil, finalityErr(FinalityRowInvalid, "seq", seqStr(r.Seq), "field", "proofId")
-		}
-		name, ok := finalityLevelName(r.Level)
-		if !ok {
-			return nil, finalityErr(FinalityRowInvalid, "seq", seqStr(r.Seq), "field", "level")
-		}
-		if len(r.PrevHash) != 32 {
-			return nil, finalityErr(FinalityRowInvalid, "seq", seqStr(r.Seq), "field", "prevHash")
-		}
-		if len(r.OwnHash) != 32 {
-			return nil, finalityErr(FinalityRowInvalid, "seq", seqStr(r.Seq), "field", "ownHash")
-		}
-		facts[i] = finalityHeadFacts{Seq: r.Seq, Level: r.Level, Chain: r.Chain, Kind: r.Kind, Header: r.Evidence}
-		section.Addenda = append(section.Addenda, finalityAddendumJSON{
-			ProofID: r.ProofID.String(), Seq: r.Seq, Level: name, Chain: r.Chain, Kind: r.Kind,
-			Evidence: hex.EncodeToString(r.Evidence), PrevHash: hex.EncodeToString(r.PrevHash), OwnHash: hex.EncodeToString(r.OwnHash),
-		})
-	}
-	leg, err := legOfRows(facts)
+	names, leg, err := validateFinalityRows(proofID, rows)
 	if err != nil {
 		return nil, err
 	}
-	section.Leg = leg
+	section := finalitySectionJSON{Format: FinalitySectionFormat, Leg: leg, Addenda: make([]finalityAddendumJSON, 0, len(rows))}
+	for i, r := range rows {
+		section.Addenda = append(section.Addenda, finalityAddendumJSON{
+			ProofID: r.ProofID.String(), Seq: r.Seq, Level: names[i], Chain: r.Chain, Kind: r.Kind,
+			Evidence: hex.EncodeToString(r.Evidence), PrevHash: hex.EncodeToString(r.PrevHash), OwnHash: hex.EncodeToString(r.OwnHash),
+		})
+	}
 	return json.Marshal(section)
+}
+
+// validateFinalityRows is every refusal ComposeFinalitySection and newFinalitySectionStream share: rows of another proof, a level the
+// table does not store, a hash that is not 32 bytes, headers that disagree with their rows or name two legs. It returns the level name
+// of each row and the leg. Nothing is verified.
+func validateFinalityRows(proofID uuid.UUID, rows []database.FinalityAddendum) ([]string, finalityLeg, error) {
+	facts := make([]finalityHeadFacts, len(rows))
+	names := make([]string, len(rows))
+	for i, r := range rows {
+		if r.ProofID != proofID {
+			return nil, finalityLeg{}, finalityErr(FinalityRowInvalid, "seq", seqStr(r.Seq), "field", "proofId")
+		}
+		name, ok := finalityLevelName(r.Level)
+		if !ok {
+			return nil, finalityLeg{}, finalityErr(FinalityRowInvalid, "seq", seqStr(r.Seq), "field", "level")
+		}
+		if len(r.PrevHash) != 32 {
+			return nil, finalityLeg{}, finalityErr(FinalityRowInvalid, "seq", seqStr(r.Seq), "field", "prevHash")
+		}
+		if len(r.OwnHash) != 32 {
+			return nil, finalityLeg{}, finalityErr(FinalityRowInvalid, "seq", seqStr(r.Seq), "field", "ownHash")
+		}
+		names[i] = name
+		facts[i] = finalityHeadFacts{Seq: r.Seq, Level: r.Level, Chain: r.Chain, Kind: r.Kind, Header: r.Evidence}
+	}
+	leg, err := legOfRows(facts)
+	if err != nil {
+		return nil, finalityLeg{}, err
+	}
+	return names, leg, nil
 }

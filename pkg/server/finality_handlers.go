@@ -15,6 +15,8 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"reflect"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -105,19 +107,68 @@ const (
 	reasonBadNextAttemptAt  = "bad_next_attempt_at"
 	reasonNotAStatusDoc     = "not_a_status_document"
 	reasonWrongStatusFormat = "wrong_format"
+	// reasonMemberCase: a member is spelled in another case than the contract spells it (PINSSHA256 for pinsSha256). encoding/json
+	// would match it to the member; the validator's writer never produces it, so it is refused, naming the member it resembles.
+	reasonMemberCase = "member_name_case"
 )
 
-// decodeStatus reads a stored status document strictly. The reason is empty when it decoded and carries the right format.
-func decodeStatus(raw []byte) (d statusDocument, reason string) {
+// statusMembers are the names of the members of certen-finality-status/1, taken from the tags of statusDocument so that a member added
+// to the struct is covered by the case check without a second list.
+var statusMembers = jsonMembersOf(reflect.TypeOf(statusDocument{}))
+
+func jsonMembersOf(t reflect.Type) []string {
+	var out []string
+	for i := 0; i < t.NumField(); i++ {
+		if name, _, _ := strings.Cut(t.Field(i).Tag.Get("json"), ","); name != "" && name != "-" {
+			out = append(out, name)
+		}
+	}
+	return out
+}
+
+// caseVariantOf returns the member of exact that a key of keys resembles without being spelled exactly like it (same letters, another
+// case), or "" when every key that resembles one is spelled exactly. Keys are visited in sorted order so the answer is deterministic.
+func caseVariantOf(keys []string, exact ...string) string {
+	sorted := append([]string(nil), keys...)
+	sort.Strings(sorted)
+	for _, k := range sorted {
+		for _, m := range exact {
+			if k != m && strings.EqualFold(k, m) {
+				return m
+			}
+		}
+	}
+	return ""
+}
+
+func keysOf(m map[string]json.RawMessage) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	return out
+}
+
+// decodeStatus reads a stored status document strictly: a member that is not listed is refused, and so is a member spelled in another
+// case than the contract spells it (encoding/json alone would read it as the member). The reason is empty when it decoded and carries
+// the right format; for reasonMemberCase, member is the contract's spelling of the member the stored one resembles.
+func decodeStatus(raw []byte) (d statusDocument, reason string, member string) {
+	var names map[string]json.RawMessage
+	if err := json.NewDecoder(bytes.NewReader(raw)).Decode(&names); err != nil {
+		return statusDocument{}, reasonNotAStatusDoc, ""
+	}
+	if m := caseVariantOf(keysOf(names), statusMembers...); m != "" {
+		return statusDocument{}, reasonMemberCase, m
+	}
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&d); err != nil {
-		return statusDocument{}, reasonNotAStatusDoc
+		return statusDocument{}, reasonNotAStatusDoc, ""
 	}
 	if d.Format != finalityStatusFormat {
-		return statusDocument{}, reasonWrongStatusFormat
+		return statusDocument{}, reasonWrongStatusFormat, ""
 	}
-	return d, ""
+	return d, "", ""
 }
 
 // pinsIdentity is the document's pins identity: ("", true) when the member is absent, (hex, true) when it is a JSON string of exactly
@@ -143,35 +194,43 @@ func pinsIdentity(raw json.RawMessage) (string, bool) {
 // decimal ordinal (1 or more, no sign, no leading zero, within uint64) of the failed ask, next_attempt_at an RFC 3339 time. They are
 // fields of the state, not members of the document, so they are validated where they appear and nowhere else; a state without
 // them, or whose fields are not an object, is read as it always was.
-func backOffFieldsReason(state map[string]json.RawMessage) string {
+func backOffFieldsReason(state map[string]json.RawMessage) (reason, member string) {
+	// the members of a named state are code and fields; one spelled in another case is not read as either
+	if m := caseVariantOf(keysOf(state), "code", "fields"); m != "" {
+		return reasonMemberCase, m
+	}
 	rawFields, ok := state["fields"]
 	if !ok {
-		return ""
+		return "", ""
 	}
 	var fields map[string]json.RawMessage
 	if json.Unmarshal(rawFields, &fields) != nil {
-		return ""
+		return "", ""
+	}
+	// the other fields are free-form names; these two are validated, so a spelling of either in another case is refused, not skipped
+	if m := caseVariantOf(keysOf(fields), "attempt", "next_attempt_at"); m != "" {
+		return reasonMemberCase, m
 	}
 	if raw, ok := fields["attempt"]; ok {
 		var s string
 		if json.Unmarshal(raw, &s) != nil {
-			return reasonBadAttempt
+			return reasonBadAttempt, ""
 		}
 		n, err := strconv.ParseUint(s, 10, 64)
 		if err != nil || n == 0 || strconv.FormatUint(n, 10) != s {
-			return reasonBadAttempt
+			return reasonBadAttempt, ""
 		}
 	}
 	if raw, ok := fields["next_attempt_at"]; ok {
 		var s string
 		if json.Unmarshal(raw, &s) != nil {
-			return reasonBadNextAttemptAt
+			return reasonBadNextAttemptAt, ""
 		}
 		if _, err := time.Parse(time.RFC3339, s); err != nil {
-			return reasonBadNextAttemptAt
+			return reasonBadNextAttemptAt, ""
 		}
 	}
-	return ""
+	return "", ""
 }
 
 // pinsOfStoredLevel is the pins identity to show on a level that has an addendum. The level is present whatever its status row
@@ -179,7 +238,7 @@ func backOffFieldsReason(state map[string]json.RawMessage) string {
 // addendum's seq) and carry a well-formed identity. Anything else (a stale pending row, another addendum's row, a malformed
 // document) shows no identity; it never changes the level or fails the summary.
 func pinsOfStoredLevel(row database.FinalityStatus, seq int64) string {
-	d, reason := decodeStatus(row.State)
+	d, reason, _ := decodeStatus(row.State)
 	if reason != "" || d.Class != "verified" || seq <= 0 || d.Seq != uint64(seq) {
 		return ""
 	}
@@ -202,11 +261,20 @@ func statusMalformed(level string, reason string) error {
 	return finalityErr(FinalityStatusMalformed, "level", level, "reason", reason)
 }
 
+// statusMemberMalformed is statusMalformed for reasonMemberCase: it names the member of the contract the stored one resembles (never the
+// stored spelling, which is not the writer's text).
+func statusMemberMalformed(level, reason, member string) error {
+	if member == "" {
+		return statusMalformed(level, reason)
+	}
+	return finalityErr(FinalityStatusMalformed, "level", level, "reason", reason, "member", member)
+}
+
 // levelFromStatus turns a stored status row into the level's reported state.
 func levelFromStatus(level string, row database.FinalityStatus) (FinalityLevelState, error) {
-	d, reason := decodeStatus(row.State)
+	d, reason, member := decodeStatus(row.State)
 	if reason != "" {
-		return FinalityLevelState{}, statusMalformed(level, reason)
+		return FinalityLevelState{}, statusMemberMalformed(level, reason, member)
 	}
 	var state string
 	switch d.Class {
@@ -250,8 +318,8 @@ func levelFromStatus(level string, row database.FinalityStatus) (FinalityLevelSt
 		if json.Unmarshal(d.State, &obj) != nil {
 			return FinalityLevelState{}, statusMalformed(level, "state_not_an_object")
 		}
-		if reason := backOffFieldsReason(obj); reason != "" {
-			return FinalityLevelState{}, statusMalformed(level, reason)
+		if reason, member := backOffFieldsReason(obj); reason != "" {
+			return FinalityLevelState{}, statusMemberMalformed(level, reason, member)
 		}
 		out.Reason = d.State
 	}
