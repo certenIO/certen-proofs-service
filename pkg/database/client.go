@@ -175,6 +175,9 @@ var RequiredSchema = []SchemaVersion{
 	{"00026", "3c8aab92e4d5bede91b245121f18e7f29459f987e816237d1ce4c0b0357324f8"},
 	{"00027", "33111ed2735c8af9581bf4502f422935c1131589f47a9e31b8b874301cfe7d63"},
 	{"00028", "759cfbda9571a7a1063a4034fcf7502ce94210800ed49eb53e4e5992ab8b81c5"},
+	// 00031 holds proof_contract_identity (GetContractIdentity, the `contractIdentity` member). Its number is the next free one at the time of
+	// writing and follows the validator file if that is renumbered.
+	{"00031", "4e12e8af196bae8f6812c67c193dfffb44b51197c64f0c5a3bc14efc244f4e1a"},
 }
 
 // SchemaVersion is one applied migration of the shared catalog.

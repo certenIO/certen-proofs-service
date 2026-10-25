@@ -119,6 +119,7 @@ var requiredFinalityMigrations = map[string]string{
 	"00026": "3c8aab92e4d5bede91b245121f18e7f29459f987e816237d1ce4c0b0357324f8",
 	"00027": migration00027SHA256,
 	"00028": migration00028SHA256,
+	"00031": "4e12e8af196bae8f6812c67c193dfffb44b51197c64f0c5a3bc14efc244f4e1a", // proof_contract_identity (GetContractIdentity)
 }
 
 func requiredSchemaMap() map[string]string {
@@ -144,7 +145,7 @@ func TestRequiredSchemaPinsTheMigrationsTheFinalityQueriesNeed(t *testing.T) {
 		}
 		last = v.Version
 	}
-	if last != "00028" {
+	if last != "00031" {
 		t.Fatalf("the newest pinned migration is %s", last)
 	}
 }
