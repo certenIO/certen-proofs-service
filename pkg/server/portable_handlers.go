@@ -40,6 +40,12 @@ type finalityStore interface {
 	ListFinalityAddenda(ctx context.Context, proofID uuid.UUID) ([]database.FinalityAddendum, error)
 }
 
+// legHeaderStore is the optional second face of the finality store: the settlement block header of a proof's leg, from its stored
+// bundle or (a legacy leg) the reconstructed header row. A store without it composes the leg without a header, as before.
+type legHeaderStore interface {
+	LegHeaderRLP(ctx context.Context, proofID uuid.UUID, chain, number uint64, hash [32]byte) ([]byte, error)
+}
+
 // MaxFinalityContainerBytes is the largest evidence container a verifier accepts: V2_SPEC_S7 section 8.2 "evidence container <= 64 MiB",
 // the validator's finality.DefaultLimits().MaxEvidenceBytes (pkg/finality/codec.go) and its TypeScript twin (codec.ts maxEvidenceBytes).
 // An Arbitrum finalized container at the pinned max_header_chain 32768 is about 18 MB and is legal; the bound is the container
@@ -77,7 +83,7 @@ func finalityETag(base [32]byte, proofID uuid.UUID, ids []database.FinalityIdent
 		return `"` + hex.EncodeToString(base[:]) + `"`
 	}
 	h := sha256.New()
-	h.Write([]byte("certen:proof-v2-etag:finality/1\n"))
+	h.Write([]byte("certen:proof-v2-etag:finality/2\n")) // /2: the leg may carry its header (R12-OUTCOME-TX), so every tag served before differs
 	h.Write(base[:])
 	h.Write(proofID[:])
 	for _, id := range ids {
@@ -305,7 +311,8 @@ func (h *PortableHandlers) HandleGetProofV2(w http.ResponseWriter, r *http.Reque
 			return
 		}
 		// Every refusal happens here, before the first byte of the body: once the status is written a failure can only abort the response.
-		section, err := newFinalitySectionStream(proofID, rows)
+		header := h.legHeader(r.Context(), proofID, rows)
+		section, err := newFinalitySectionStreamWithHeader(proofID, rows, header)
 		if err != nil {
 			h.logger.Printf("FINALITY_SECTION_UNUSABLE proof=%s %v", proofID, err)
 			writeJSONError(w, http.StatusInternalServerError, "FINALITY_SECTION_UNUSABLE", err.Error())
