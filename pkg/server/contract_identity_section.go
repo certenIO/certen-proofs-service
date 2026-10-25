@@ -13,6 +13,9 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"net/http"
+	"strconv"
+	"strings"
 
 	"github.com/google/uuid"
 
@@ -72,4 +75,61 @@ func ComposeContractIdentity(row *database.ContractIdentityRow) (json.RawMessage
 		Evidence: "0x" + hex.EncodeToString(row.Evidence),
 		Digest:   "0x" + hex.EncodeToString(row.Digest),
 	})
+}
+
+// HandleGetContractIdentity serves GET /api/v1/proofs/{proof_id}/contract-identity: the member alone (at most about 8.4 MB of hex, bounded by
+// MaxContractIdentityBytes), for a reader that streams the whole document and never parses it (the api-gateway). The body is the member
+// exactly as the document carries it. The entity tag is the sha256 of the member, so it includes the row identity, and a matching
+// If-None-Match is an empty 304.
+//
+//	200  the member
+//	404  CONTRACT_IDENTITY_NOT_AVAILABLE: the proof has no container (or this service is not wired to read them)
+//	500  CONTRACT_IDENTITY_UNUSABLE: the row cannot be read or contradicts itself; never reported as "not available"
+func (h *PortableHandlers) HandleGetContractIdentity(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSONError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Only GET is allowed")
+		return
+	}
+	parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/api/v1/proofs/"), "/")
+	if len(parts) != 2 || parts[1] != "contract-identity" {
+		writeJSONError(w, http.StatusBadRequest, "INVALID_PATH", "Invalid endpoint path")
+		return
+	}
+	proofID, err := uuid.Parse(parts[0])
+	if err != nil {
+		writeJSONError(w, http.StatusBadRequest, "INVALID_PROOF_ID", "Invalid proof ID format")
+		return
+	}
+	if h.identity == nil {
+		writeJSONError(w, http.StatusNotFound, "CONTRACT_IDENTITY_NOT_AVAILABLE", fmt.Sprintf("No contract identity for proof %s", proofID))
+		return
+	}
+	row, err := h.identity.GetContractIdentity(r.Context(), proofID)
+	if err != nil {
+		h.logger.Printf("CONTRACT_IDENTITY_UNUSABLE proof=%s %v", proofID, err)
+		writeJSONError(w, http.StatusInternalServerError, "CONTRACT_IDENTITY_UNUSABLE", "Failed to retrieve the contract identity")
+		return
+	}
+	if row == nil {
+		writeJSONError(w, http.StatusNotFound, "CONTRACT_IDENTITY_NOT_AVAILABLE", fmt.Sprintf("No contract identity for proof %s", proofID))
+		return
+	}
+	member, err := ComposeContractIdentity(row)
+	if err != nil {
+		h.logger.Printf("CONTRACT_IDENTITY_UNUSABLE proof=%s %v", proofID, err)
+		writeJSONError(w, http.StatusInternalServerError, "CONTRACT_IDENTITY_UNUSABLE", err.Error())
+		return
+	}
+	sum := sha256.Sum256(member)
+	etag := `"` + hex.EncodeToString(sum[:]) + `"`
+	w.Header().Set("ETag", etag)
+	w.Header().Set("Cache-Control", "private, no-cache")
+	if r.Header.Get("If-None-Match") == etag {
+		w.WriteHeader(http.StatusNotModified)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Content-Length", strconv.Itoa(len(member)))
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(member)
 }

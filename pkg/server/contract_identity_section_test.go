@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"strings"
 	"testing"
@@ -182,5 +183,70 @@ func TestPortableDocumentRefusesAStoredContractIdentityMemberAndAStoreFailureIsN
 	bad.EvidenceSHA256 = bytes.Repeat([]byte{1}, 32)
 	if rr := get(NewPortableHandlers(&fakePortable{p: stored()}, nil).WithContractIdentity(&fakeIdentity{row: bad}), proofV, nil); rr.Code != http.StatusInternalServerError || !strings.Contains(rr.Body.String(), ContractIdentityRowInvalid) {
 		t.Fatalf("a row that contradicts itself is %s: %d %s", ContractIdentityRowInvalid, rr.Code, rr.Body.String())
+	}
+}
+
+// GET /api/v1/proofs/{id}/contract-identity: the bounded member-only endpoint the api-gateway reads (the v2 document is streamed and never parsed
+// there). The body is the member exactly as the document carries it; 404 names the absence; the tag is the sha256 of the member, so it includes the row.
+func getIdentity(h *PortableHandlers, id string, hdr map[string]string) *httptest.ResponseRecorder {
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/proofs/"+id+"/contract-identity", nil)
+	for k, v := range hdr {
+		req.Header.Set(k, v)
+	}
+	h.HandleGetContractIdentity(rr, req)
+	return rr
+}
+
+func TestContractIdentityEndpointServesTheMemberWithATagThatFollowsTheRow(t *testing.T) {
+	h := NewPortableHandlers(&fakePortable{p: stored()}, nil).WithContractIdentity(&fakeIdentity{row: fixtureRow(t)})
+	rr := getIdentity(h, proofV, nil)
+	if rr.Code != http.StatusOK || !bytes.Equal(rr.Body.Bytes(), fixtureMember(t)) {
+		t.Fatalf("the body must be the shared fixture member: %d", rr.Code)
+	}
+	sum := sha256.Sum256(fixtureMember(t))
+	tag := rr.Header().Get("ETag")
+	if tag != `"`+hex.EncodeToString(sum[:])+`"` || rr.Header().Get("Content-Type") != "application/json" || rr.Header().Get("Content-Length") == "" {
+		t.Fatalf("tag %q type %q length %q", tag, rr.Header().Get("Content-Type"), rr.Header().Get("Content-Length"))
+	}
+	if nm := getIdentity(h, proofV, map[string]string{"If-None-Match": tag}); nm.Code != http.StatusNotModified || nm.Body.Len() != 0 {
+		t.Fatalf("a matching If-None-Match is an empty 304, got %d", nm.Code)
+	}
+	better := fixtureRow(t)
+	better.Seq, better.Digest = 2, bytes.Repeat([]byte{9}, 32)
+	if newer := getIdentity(NewPortableHandlers(&fakePortable{p: stored()}, nil).WithContractIdentity(&fakeIdentity{row: better}), proofV, map[string]string{"If-None-Match": tag}); newer.Code != http.StatusOK || newer.Header().Get("ETag") == tag {
+		t.Fatal("a new row has a new tag and is served in full")
+	}
+}
+
+func TestContractIdentityEndpointNamesAbsenceRefusalsAndFailures(t *testing.T) {
+	cases := []struct {
+		name string
+		h    *PortableHandlers
+		id   string
+		want int
+		code string
+	}{
+		{"no row", NewPortableHandlers(&fakePortable{}, nil).WithContractIdentity(&fakeIdentity{}), proofV, http.StatusNotFound, "CONTRACT_IDENTITY_NOT_AVAILABLE"},
+		{"not wired", NewPortableHandlers(&fakePortable{}, nil), proofV, http.StatusNotFound, "CONTRACT_IDENTITY_NOT_AVAILABLE"},
+		{"bad id", NewPortableHandlers(&fakePortable{}, nil).WithContractIdentity(&fakeIdentity{}), "not-a-uuid", http.StatusBadRequest, "INVALID_PROOF_ID"},
+		{"store error", NewPortableHandlers(&fakePortable{}, nil).WithContractIdentity(&fakeIdentity{err: context.DeadlineExceeded}), proofV, http.StatusInternalServerError, "CONTRACT_IDENTITY_UNUSABLE"},
+		{"too large", NewPortableHandlers(&fakePortable{}, nil).WithContractIdentity(&fakeIdentity{err: database.ErrContractIdentityTooLarge}), proofV, http.StatusInternalServerError, "CONTRACT_IDENTITY_UNUSABLE"},
+	}
+	for _, c := range cases {
+		rr := getIdentity(c.h, c.id, nil)
+		if rr.Code != c.want || !strings.Contains(rr.Body.String(), c.code) {
+			t.Fatalf("%s: %d %s", c.name, rr.Code, rr.Body.String())
+		}
+	}
+	bad := fixtureRow(t)
+	bad.EvidenceSHA256 = bytes.Repeat([]byte{1}, 32)
+	if rr := getIdentity(NewPortableHandlers(&fakePortable{}, nil).WithContractIdentity(&fakeIdentity{row: bad}), proofV, nil); rr.Code != http.StatusInternalServerError || !strings.Contains(rr.Body.String(), ContractIdentityRowInvalid) {
+		t.Fatalf("a self-contradicting row: %d %s", rr.Code, rr.Body.String())
+	}
+	post := httptest.NewRecorder()
+	NewPortableHandlers(&fakePortable{}, nil).HandleGetContractIdentity(post, httptest.NewRequest(http.MethodPost, "/api/v1/proofs/"+proofV+"/contract-identity", nil))
+	if post.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("POST: %d", post.Code)
 	}
 }

@@ -192,6 +192,8 @@ func main() {
 		switch {
 		case strings.HasSuffix(path, "/v2"):
 			portableHandlers.HandleGetProofV2(w, r)
+		case strings.HasSuffix(path, "/contract-identity"):
+			portableHandlers.HandleGetContractIdentity(w, r)
 		case strings.HasSuffix(path, "/finality"):
 			finalityHandlers.HandleGetProofFinality(w, r)
 		case strings.HasSuffix(path, "/bundle/verify"):
