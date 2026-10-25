@@ -89,11 +89,19 @@ const evidenceKey = `"evidence":"`
 // newFinalitySectionStream validates the rows exactly as ComposeFinalitySection does (same refusals, same names) and returns the member
 // as a stream, or nil when there are no rows (the member is then absent).
 func newFinalitySectionStream(proofID uuid.UUID, rows []database.FinalityAddendum) (*finalitySectionStream, error) {
+	return newFinalitySectionStreamWithHeader(proofID, rows, nil)
+}
+
+// newFinalitySectionStreamWithHeader is newFinalitySectionStream with the leg carrying header (see ComposeFinalitySectionWithHeader).
+func newFinalitySectionStreamWithHeader(proofID uuid.UUID, rows []database.FinalityAddendum, header []byte) (*finalitySectionStream, error) {
 	if len(rows) == 0 {
 		return nil, nil
 	}
 	names, leg, err := validateFinalityRows(proofID, rows)
 	if err != nil {
+		return nil, err
+	}
+	if leg, err = withLegHeader(leg, header); err != nil {
 		return nil, err
 	}
 	empty, err := json.Marshal(finalitySectionJSON{Format: FinalitySectionFormat, Leg: leg, Addenda: []finalityAddendumJSON{}})

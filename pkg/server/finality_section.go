@@ -79,6 +79,32 @@ type finalityLeg struct {
 	Chain       uint64 `json:"chain"`
 	BlockNumber uint64 `json:"blockNumber"`
 	BlockHash   string `json:"blockHash"`
+	// HeaderRlp is the OPTIONAL lower-case hex of the settlement block header (R12-OUTCOME-TX): present only when the service holds a
+	// header that hashes to BlockHash, so a holder of the exported file alone can recompute the leg binding. A verifier predating the
+	// member refuses a leg that carries it (unknown_key), which is why verifiers are deployed before this service composes it.
+	HeaderRlp string `json:"headerRlp,omitempty"`
+}
+
+// FinalityLegHeaderMismatch: a header offered for the leg does not hash to the leg's block hash.
+const FinalityLegHeaderMismatch = "finality_leg_header_mismatch"
+
+// withLegHeader returns the leg carrying header, or the leg unchanged when header is empty. A header that does not hash to the leg's
+// blockHash is refused by name (the composer decides whether to drop it): the member would be refused by every verifier.
+func withLegHeader(leg finalityLeg, header []byte) (finalityLeg, error) {
+	if len(header) == 0 {
+		return leg, nil
+	}
+	if h := keccak256(header); hex.EncodeToString(h[:]) != leg.BlockHash {
+		return leg, finalityErr(FinalityLegHeaderMismatch, "field", "headerRlp")
+	}
+	leg.HeaderRlp = hex.EncodeToString(header)
+	return leg, nil
+}
+
+// finalityLegOf is the single leg the rows of a proof are bound to (validateFinalityRows without the rest of its result).
+func finalityLegOf(proofID uuid.UUID, rows []database.FinalityAddendum) (finalityLeg, error) {
+	_, leg, err := validateFinalityRows(proofID, rows)
+	return leg, err
 }
 
 // cfe1Header is the container header of V2_SPEC_S7 section 3.1: "CFE1"(4) || STR kind || u64 chain || u8 level || u64
@@ -194,11 +220,20 @@ type finalitySectionJSON struct {
 // member is then absent from the document, not empty). Rows that name two legs, a header that disagrees with its own row, a
 // level the table does not store or a hash that is not 32 bytes are refused by name; nothing is verified.
 func ComposeFinalitySection(proofID uuid.UUID, rows []database.FinalityAddendum) (json.RawMessage, error) {
+	return ComposeFinalitySectionWithHeader(proofID, rows, nil)
+}
+
+// ComposeFinalitySectionWithHeader is ComposeFinalitySection with the leg carrying header (the settlement block header; nil or empty
+// carries none, exactly as before). A header that does not hash to the leg's blockHash is refused by name.
+func ComposeFinalitySectionWithHeader(proofID uuid.UUID, rows []database.FinalityAddendum, header []byte) (json.RawMessage, error) {
 	if len(rows) == 0 {
 		return nil, nil
 	}
 	names, leg, err := validateFinalityRows(proofID, rows)
 	if err != nil {
+		return nil, err
+	}
+	if leg, err = withLegHeader(leg, header); err != nil {
 		return nil, err
 	}
 	section := finalitySectionJSON{Format: FinalitySectionFormat, Leg: leg, Addenda: make([]finalityAddendumJSON, 0, len(rows))}
