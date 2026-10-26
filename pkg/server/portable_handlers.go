@@ -108,6 +108,7 @@ func identitiesOf(rows []database.FinalityAddendum) []database.FinalityIdentity 
 type PortableHandlers struct {
 	store    portableStore
 	finality finalityStore
+	identity contractIdentityStore
 	logger   *log.Logger
 	large    chan struct{} // one token per large serve in progress; its capacity is the limit
 }
@@ -133,6 +134,13 @@ func (h *PortableHandlers) WithLargeServeLimit(n int) *PortableHandlers {
 // rows at request time. Without it the member is never composed.
 func (h *PortableHandlers) WithFinality(store finalityStore) *PortableHandlers {
 	h.finality = store
+	return h
+}
+
+// WithContractIdentity makes the handler compose the document's `contractIdentity` member (V2_SPEC_S8 Q2 item 3) from the validators'
+// proof_contract_identity row at request time. Without it the member is never composed.
+func (h *PortableHandlers) WithContractIdentity(store contractIdentityStore) *PortableHandlers {
+	h.identity = store
 	return h
 }
 
@@ -170,6 +178,10 @@ func portableMembers(p *database.PortableV2) (map[string]json.RawMessage, error)
 		if strings.EqualFold(k, "finality") {
 			return nil, finalityErr(FinalityMemberInDocument)
 		}
+		// the same for the contractIdentity member: a stored one is a claim this service did not compose from the validators' row
+		if strings.EqualFold(k, "contractIdentity") {
+			return nil, finalityErr(ContractIdentityMemberInDocument)
+		}
 		// the same for the members composed here: the exact key is replaced by the composed one, another spelling would be read beside it
 		for _, composed := range []string{"majors", "govRootV3Inputs"} {
 			if k != composed && strings.EqualFold(k, composed) {
@@ -190,6 +202,9 @@ func portableMembers(p *database.PortableV2) (map[string]json.RawMessage, error)
 	var err error
 	if doc["majors"], err = json.Marshal(majors); err != nil {
 		return nil, err
+	}
+	if p.ContractIdentity != nil {
+		doc["contractIdentity"] = p.ContractIdentity
 	}
 	if p.GovRootInputs != "" {
 		if !json.Valid([]byte(p.GovRootInputs)) {
@@ -231,6 +246,27 @@ func (h *PortableHandlers) HandleGetProofV2(w http.ResponseWriter, r *http.Reque
 	if p == nil {
 		writeJSONError(w, http.StatusNotFound, "PROOF_V2_NOT_AVAILABLE", fmt.Sprintf("No proof v2 document for proof %s", proofID))
 		return
+	}
+	// The contractIdentity member is composed from the validators' row before anything else: it is part of the base the tag is built on, so
+	// a better capture (a new row) changes the tag and an unchanged row never does.
+	if h.identity != nil {
+		row, err := h.identity.GetContractIdentity(r.Context(), proofID)
+		if err != nil {
+			h.logger.Printf("CONTRACT_IDENTITY_UNUSABLE proof=%s %v", proofID, err)
+			writeJSONError(w, http.StatusInternalServerError, "CONTRACT_IDENTITY_UNUSABLE", "Failed to retrieve the contract identity")
+			return
+		}
+		if row != nil {
+			member, err := ComposeContractIdentity(row)
+			if err != nil {
+				h.logger.Printf("CONTRACT_IDENTITY_UNUSABLE proof=%s %v", proofID, err)
+				writeJSONError(w, http.StatusInternalServerError, "CONTRACT_IDENTITY_UNUSABLE", err.Error())
+				return
+			}
+			withMember := *p
+			withMember.ContractIdentity = member
+			p = &withMember
+		}
 	}
 	// The document without its finality member first: it is what the tag is built on, and it is refused here when the stored document
 	// carries a finality member of its own.

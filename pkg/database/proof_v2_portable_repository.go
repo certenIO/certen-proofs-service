@@ -9,6 +9,7 @@ package database
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 
 	"github.com/google/uuid"
@@ -24,6 +25,9 @@ type PortableV2 struct {
 	GovRootInputs string
 	// Spine holds major blocks 1..Majors in order, each as its JSON.
 	Spine []string
+	// ContractIdentity is the `contractIdentity` member (certen-contract-identity/1) composed at request time from the validators' insert-only
+	// proof_contract_identity row; nil when the proof has none. It is never read from the database with the document: the handler sets it.
+	ContractIdentity json.RawMessage
 }
 
 // GetPortableV2 returns what a proof's portable document is composed from, or (nil, nil) when the proof has none: it does not

@@ -175,7 +175,7 @@ func main() {
 	// The portable proof v2 document: what a verifier needs to check the Accumulate side of a proof offline (RB7b-F30).
 	// Its `finality` member (staged finality addenda, V2_SPEC_S7 2.5) is composed at request time from the validators' rows
 	// (certen-validator migrations 00027 and 00028), and GET .../finality summarises what they recorded per level.
-	portableHandlers := server.NewPortableHandlers(repos.ProofArtifacts, logger).WithFinality(repos.ProofArtifacts)
+	portableHandlers := server.NewPortableHandlers(repos.ProofArtifacts, logger).WithFinality(repos.ProofArtifacts).WithContractIdentity(repos.ProofArtifacts)
 	if v := os.Getenv("PROOF_V2_LARGE_SERVES_MAX"); v != "" {
 		// how many /v2 serves with more than server.LargeServeThresholdBytes of evidence run at once; a bad value stops the service at start
 		n, err := strconv.Atoi(v)
@@ -192,6 +192,8 @@ func main() {
 		switch {
 		case strings.HasSuffix(path, "/v2"):
 			portableHandlers.HandleGetProofV2(w, r)
+		case strings.HasSuffix(path, "/contract-identity"):
+			portableHandlers.HandleGetContractIdentity(w, r)
 		case strings.HasSuffix(path, "/finality"):
 			finalityHandlers.HandleGetProofFinality(w, r)
 		case strings.HasSuffix(path, "/bundle/verify"):
