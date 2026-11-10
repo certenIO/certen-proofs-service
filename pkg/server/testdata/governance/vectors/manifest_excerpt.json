@@ -1,0 +1,61 @@
+{
+ "source": "certenIO/certen-validator pkg/proof/v2/testdata/certify1/manifest.json at 15814ad5579e6b79eec62a7accc12b6646ae7157 (cases copied as written; each file is pkg/proof/v2/testdata/certify1/<file>, byte for byte)",
+ "manifest_sha256": "3106933de49a46d1c177d89a4af628d75b3651250001092b9849e16090968088",
+ "format": "certen-certify1-conformance/1",
+ "domain": "certen:g1:v4",
+ "portableFormat": "certen-proof-v2-accumulate-portable/1",
+ "cases": [
+  {
+   "name": "continuous-chain-verified",
+   "expect": "refused",
+   "file": "continuous-chain-verified.json",
+   "sha256": "b718fad48518de8dc8637f6447f083e2ea5dcb7180ffe54a2dd1c37901697331",
+   "state": "certify_update_unproven",
+   "prefix": "certify_update_unproven{acc://dn.acme/globals,28ae41e0a0d8e5aeb3e4dd8559c4e384534a247d10db100c07db37ad89cf6eea,110}: the update's root chain position does not lie between the previous and this anchor's root chain index"
+  },
+  {
+   "name": "continuous-chain-verified-g",
+   "expect": "verified",
+   "file": "continuous-chain-verified-g.json",
+   "sha256": "0637a20d5620b4b3ad7edc10fb92039836e6274b75738992783296a6d1aef861"
+  },
+  {
+   "name": "anchor-of-another-incarnation",
+   "expect": "refused",
+   "file": "anchor-of-another-incarnation.json",
+   "sha256": "70757388f7e975c64e460ba35a623756e23c95f8f23e0377c4977ff8d203f92a",
+   "prefix": "certify run 0: block 110: signer is not an active directory validator"
+  },
+  {
+   "name": "anchor-of-another-incarnation-g",
+   "expect": "refused",
+   "file": "anchor-of-another-incarnation-g.json",
+   "sha256": "ce62e9abdf05b3eadf03df6c6e5213c34b4f5c54e69454e479eb9a617446c941",
+   "prefix": "certify run 0: block 110: signer is not an active directory validator"
+  },
+  {
+   "name": "link-absent",
+   "expect": "refused",
+   "file": "link-absent.json",
+   "sha256": "2f44b85b99e194491f656555ae4d758e09ea0fe66deddd4d26f553fb20bb0ba3",
+   "state": "certify_link_missing",
+   "prefix": "certify_link_missing{0}: an anchored item has no link"
+  },
+  {
+   "name": "link-absent-g",
+   "expect": "refused",
+   "file": "link-absent-g.json",
+   "sha256": "e45be217e7427937dd5f8c5911e03f8c29071aed76e5d50b2d5cc332f4ce35ef",
+   "state": "certify_link_missing",
+   "prefix": "certify_link_missing{0}: an anchored item has no link"
+  },
+  {
+   "name": "continuous-genesis-link-absent",
+   "expect": "refused",
+   "file": "continuous-genesis-link-absent.json",
+   "sha256": "c65be5352ae78724cc281ee018feacf66246012a25e2651499a5b2761c1b1fde",
+   "state": "certify_link_missing",
+   "prefix": "certify_link_missing{genesis}: an anchored item has no link"
+  }
+ ]
+}

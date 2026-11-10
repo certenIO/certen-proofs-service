@@ -96,9 +96,16 @@ func main() {
 
 	// Create HTTP handlers
 	proofHandlers := server.NewProofHandlers(repos, cfg.ValidatorID, logger)
+	// CERTEN_PINNED_INCARNATION: the Accumulate incarnation (hex32) POST /verify/governance judges G1 evidence against.
+	// Unset: callers must pin one in the request. Set and unusable: refuse to start.
+	pinnedIncarnation := os.Getenv("CERTEN_PINNED_INCARNATION")
+	if err := server.ValidatePinnedIncarnation(pinnedIncarnation); err != nil {
+		log.Fatalf("CERTEN_PINNED_INCARNATION is not usable: %v", err)
+	}
 	bundleHandlers := server.NewBundleHandlers(repos, &server.BundleHandlersConfig{
 		ValidatorID:        cfg.ValidatorID,
 		RateLimitPerMinute: cfg.RateLimitRequests,
+		PinnedIncarnation:  pinnedIncarnation,
 	}, logger)
 	bulkHandlers := server.NewBulkHandlers(repos, &server.BulkHandlersConfig{
 		ValidatorID:        cfg.ValidatorID,

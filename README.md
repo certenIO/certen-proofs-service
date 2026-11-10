@@ -132,6 +132,7 @@ npm run dev
 | `API_PORT` | `8080` | API server port |
 | `API_HOST` | `0.0.0.0` | API server host |
 | `SERVICE_ID` | `proof-service-1` | Service identifier |
+| `CERTEN_PINNED_INCARNATION` | _(unset)_ | Accumulate incarnation (hex32) that `POST /verify/governance` judges G1 evidence against; unset means callers must send `pinned_incarnation`; set and unusable stops the service at start (see `docs/verify-governance.md`) |
 | `LOG_LEVEL` | `info` | Logging level (debug, info, warn, error) |
 | `CORS_ORIGINS` | `http://localhost:3000` | Allowed CORS origins (comma-separated) |
 | `API_KEY_REQUIRED` | `false` | Require API keys for access |

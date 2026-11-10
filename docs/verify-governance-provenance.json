@@ -1,0 +1,51 @@
+{
+  "what": "The validator code POST /api/v1/proofs/verify/governance runs (DAX-F2). It is imported as a Go module at one pinned commit, not copied; go.sum pins every byte of the module. This record lists the source files the endpoint depends on, with their sha256 as compiled. TestGovernanceVerifierIsTheRecordedValidatorCode fails when go.mod moves to another commit or any listed file differs from this record. To move the pin: change go.mod, read the validator diff of these files, regenerate this record, and re-run the tests.",
+  "source_repo": "git@github.com:certenIO/certen-validator.git (public)",
+  "commit": "15814ad5579e6b79eec62a7accc12b6646ae7157",
+  "commit_date": "2026-10-26T17:09:41-04:00",
+  "validator_go_module_path": "github.com/certen/independant-validator",
+  "modules": [
+    {
+      "module_path": "github.com/certen/independant-validator",
+      "replaced_by": "github.com/certenIO/certen-validator",
+      "version": "v0.0.0-20261026210941-15814ad5579e",
+      "files": [
+        {
+          "path": "pkg/proof/governance_evidence.go",
+          "sha256": "7ab29370ee95bffabef87f1a407cae1e54d37a56e44dab8f746af6f439ae43c5"
+        },
+        {
+          "path": "pkg/proof/governance_storage.go",
+          "sha256": "fb2a9ca514f12e299f9d7db22f1692d293e43259d0aaea1c82b478398a373f13"
+        },
+        {
+          "path": "pkg/proof/validator_set_proof.go",
+          "sha256": "c2cf77fd488fd1b0f4ffe6bee23e71066e911a8dd25bb266793acd2137758108"
+        },
+        {
+          "path": "pkg/proof/v2/portable.go",
+          "sha256": "54fc9d48b64c0c502361b72f0e795fe030933cdb0f11e9939f8cdc28ebdfd304"
+        },
+        {
+          "path": "pkg/proof/v2/evidence.go",
+          "sha256": "7ee30291810dcefa412706613c8100f77d5b39b8ec71dabdf718d219fbdf025a"
+        },
+        {
+          "path": "pkg/proof/v2/crosspartition.go",
+          "sha256": "4252e54032378d20e67be50cc7253ed844190d90041016723d204afec4b50aec"
+        }
+      ]
+    },
+    {
+      "module_path": "github.com/certen/independant-validator/accumulate-lite-client-2/liteclient",
+      "replaced_by": "github.com/certenIO/certen-validator/accumulate-lite-client-2/liteclient",
+      "version": "v0.0.0-20261026210941-15814ad5579e",
+      "files": [
+        {
+          "path": "proof/working-proof_do_not_edit/receipt_verifier.go",
+          "sha256": "164eaace6edde4c1b1488f632c329c56ffd01e89e439dbe6794288f344633086"
+        }
+      ]
+    }
+  ]
+}

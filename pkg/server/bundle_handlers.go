@@ -41,6 +41,9 @@ type BundleHandlers struct {
 	rateLimiter     *RateLimiter
 	apiKeyValidator *APIKeyValidator
 	requests        proofRequestStore
+	// governance is what HandleVerifyGovernance reads of a stored proof; pinnedIncarnation is the service-wide incarnation (hex32, may be empty).
+	governance        governanceStore
+	pinnedIncarnation string
 }
 
 // proofRequestStore is what HandleRequestProof needs of the database: the lookup of an existing proof and the insert of
@@ -56,6 +59,9 @@ type BundleHandlersConfig struct {
 	RateLimitPerMinute     int
 	MaxBundleSizeBytes     int64
 	EnableAPIKeyValidation bool
+	// PinnedIncarnation is the Accumulate incarnation (hex32) the operator trusts: the trust base of POST /verify/governance for G1.
+	// Empty means the request must pin one; G1 is never reported verified without a pin.
+	PinnedIncarnation string
 }
 
 // NewBundleHandlers creates new bundle handlers
@@ -82,6 +88,8 @@ func NewBundleHandlers(
 		rateLimiter:     NewRateLimiter(config.RateLimitPerMinute),
 		apiKeyValidator: NewAPIKeyValidator(repos),
 		requests:        repos.ProofArtifacts,
+		governance:        repos.ProofArtifacts,
+		pinnedIncarnation: config.PinnedIncarnation,
 	}
 }
 
@@ -636,104 +644,7 @@ func (h *BundleHandlers) HandleVerifyMerkle(w http.ResponseWriter, r *http.Reque
 // GOVERNANCE VERIFICATION ENDPOINTS
 // =============================================================================
 
-// GovernanceVerificationRequest represents a governance proof verification request
-type GovernanceVerificationRequest struct {
-	ProofID         string                 `json:"proof_id"`
-	GovernanceLevel string                 `json:"governance_level"` // G0, G1, G2
-	ProofData       map[string]interface{} `json:"proof_data"`
-}
-
-// GovernanceVerificationResponse represents governance verification result
-type GovernanceVerificationResponse struct {
-	Valid      bool                   `json:"valid"`
-	Level      string                 `json:"level"`
-	Details    map[string]interface{} `json:"details"`
-	VerifiedAt time.Time              `json:"verified_at"`
-}
-
-// HandleVerifyGovernance handles POST /api/v1/proofs/verify/governance
-func (h *BundleHandlers) HandleVerifyGovernance(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		h.writeError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Only POST is allowed")
-		return
-	}
-
-	var req GovernanceVerificationRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		h.writeError(w, http.StatusBadRequest, "INVALID_REQUEST", "Invalid request format")
-		return
-	}
-
-	// Validate governance level
-	if req.GovernanceLevel != "G0" && req.GovernanceLevel != "G1" && req.GovernanceLevel != "G2" {
-		h.writeError(w, http.StatusBadRequest, "INVALID_LEVEL", "governance_level must be 'G0', 'G1', or 'G2'")
-		return
-	}
-
-	ctx := r.Context()
-	details := make(map[string]interface{})
-
-	// If proof ID is provided, verify against stored proof
-	valid := false
-	if req.ProofID != "" {
-		proofID, err := uuid.Parse(req.ProofID)
-		if err != nil {
-			h.writeError(w, http.StatusBadRequest, "INVALID_PROOF_ID", "Invalid proof ID format")
-			return
-		}
-
-		// Get stored governance proof
-		govLevels, err := h.repos.ProofArtifacts.GetGovernanceProofLevels(ctx, proofID)
-		if err != nil {
-			h.writeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to retrieve governance proof")
-			return
-		}
-
-		// Find matching level
-		for _, level := range govLevels {
-			if string(level.GovLevel) == req.GovernanceLevel {
-				valid = level.Verified
-				details["stored_level"] = level
-				break
-			}
-		}
-	} else if req.ProofData != nil {
-		// Verify provided proof data
-		switch req.GovernanceLevel {
-		case "G0":
-			// G0: Execution Inclusion - verify merkle proof exists
-			if merkleProof, ok := req.ProofData["merkle_proof"]; ok && merkleProof != nil {
-				valid = true
-				details["has_merkle_proof"] = true
-			}
-		case "G1":
-			// G1: Governance Correctness - verify authority and signatures
-			if authSnapshot, ok := req.ProofData["authority_snapshot"]; ok && authSnapshot != nil {
-				if signatures, ok := req.ProofData["signatures"]; ok && signatures != nil {
-					valid = true
-					details["has_authority_snapshot"] = true
-					details["has_signatures"] = true
-				}
-			}
-		case "G2":
-			// G2: Outcome Binding - verify post-state hash
-			if postState, ok := req.ProofData["post_state_hash"]; ok && postState != nil {
-				if inclusionProof, ok := req.ProofData["inclusion_proof"]; ok && inclusionProof != nil {
-					valid = true
-					details["has_post_state"] = true
-					details["has_inclusion_proof"] = true
-				}
-			}
-		}
-	}
-
-	h.writeJSON(w, http.StatusOK, GovernanceVerificationResponse{
-		Valid:      valid,
-		Level:      req.GovernanceLevel,
-		Details:    details,
-		VerifiedAt: time.Now().UTC(),
-	})
-}
+// The request and response types and HandleVerifyGovernance are in governance_verify.go.
 
 // =============================================================================
 // RATE LIMITER
