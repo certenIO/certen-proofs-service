@@ -5,11 +5,12 @@
 // WHAT THIS REPLACES (DAX-F1). The handler used to answer `valid = level.Verified` for a stored proof (it echoed a flag a writer
 // had set) and `valid = true` for any request whose proof_data had the right member names with non-nil values. Neither read a byte
 // of evidence. Both are gone: every `valid:true` this file produces is the verdict of the validator's own offline verifier,
-// run over the evidence bytes, in this process.
+// run over the evidence bytes in this process, AND agreement with the pin the caller (or, for G1, the operator) supplied: the
+// verifier alone proves a document consistent with itself, and the pin says which chain or anchor it must be about.
 //
 // THE SAME CODE, NOT A LOOKALIKE (DAX-F2). The verifier is imported, not rewritten:
 //
-//	G0, G2  proof.GovReceiptEvidence.VerifyMerkle              (github.com/certen/independant-validator/pkg/proof)
+//	G0, G2  proof.GovReceiptEvidence.VerifyMerkle              (github.com/certen/independant-validator/pkg/proof), then the pinned anchor
 //	G1      proofv2.VerifyPortable                             (github.com/certen/independant-validator/pkg/proof/v2)
 //	stored  proof.GovernanceLevelsFromStorage                  (the reader cmd/proofverify --governance uses)
 //
@@ -17,9 +18,14 @@
 // commit and the sha256 of every source file this service depends on, and TestGovernanceVerifierIsTheRecordedValidatorCode fails
 // when the compiled dependency stops matching the record).
 //
-// FAIL CLOSED. Anything not established is a NAMED state with valid=false. There is no default true: the only path to
-// `valid:true` is governanceVerified, reached after the verifier returned no error, the verdict was complete, and (G1) the
-// incarnation the evidence proves equals the incarnation the caller or the operator pinned.
+// FAIL CLOSED. Anything not established is a NAMED state with valid=false. There is no default true: the only paths to
+// `valid:true` end in GovStateVerified, and each is reached only after the verifier returned no error and the verdict was complete:
+//
+//	G1      the incarnation the evidence proves equals the incarnation the caller or the operator pinned, the validator set verdict
+//	        is verified and no fact is unproven;
+//	G0, G2  the receipt recomputes to its own anchor AND that anchor equals the anchor the caller pinned (pinned_anchor). A receipt
+//	        proves a leaf under ITS OWN anchor and nothing more, so a receipt without a pinned anchor is GovStateAnchorUnbound (a caller
+//	        can invent a receipt whose start equals its anchor), and a different pinned anchor is GovStateAnchorMismatch (DAX-F16).
 package server
 
 import (
@@ -54,6 +60,8 @@ const (
 	GovStateSetUnverified        = "validator_set_unverified" // the validator set was asserted, not derived and bound
 	GovStateIncarnationNotPinned = "incarnation_not_pinned"   // no incarnation was pinned, so which chain the evidence is about is unknown
 	GovStateIncarnationMismatch  = "incarnation_mismatch"     // the evidence is about another Accumulate incarnation than the pinned one
+	GovStateAnchorUnbound        = "anchor_unbound"           // G0/G2: the receipt recomputes to its own anchor, but no anchor was pinned, so nothing ties it to Accumulate
+	GovStateAnchorMismatch       = "anchor_mismatch"          // G0/G2: the anchor of the receipt is not the pinned anchor
 	GovStateLevelNotStored       = "level_not_stored"         // the proof has no stored row for the requested level
 )
 
@@ -81,6 +89,9 @@ type GovernanceVerificationRequest struct {
 	// PinnedIncarnation is the Accumulate incarnation (hex32) the caller trusts, from its own record. Optional when the service
 	// has one configured; G1 is never `verified` without one of them.
 	PinnedIncarnation string `json:"pinned_incarnation,omitempty"`
+	// PinnedAnchor is the Accumulate anchor (hex32) the caller trusts, from its own record (G0, G2). A receipt is verified only
+	// against it: without one the answer is anchor_unbound.
+	PinnedAnchor string `json:"pinned_anchor,omitempty"`
 }
 
 // GovernanceVerificationResponse is the verdict. Valid is true only when State is "verified".
@@ -114,8 +125,8 @@ func boundedReason(s string) string {
 	return s
 }
 
-// parsePinnedIncarnation reads a hex32 incarnation; "" is "none".
-func parsePinnedIncarnation(s string) (pin [32]byte, set bool, err error) {
+// parseHex32 reads 32 bytes of hex (an optional 0x prefix); "" is "none". The comparison primitive is the decoded bytes.
+func parseHex32(s, what string) (pin [32]byte, set bool, err error) {
 	s = strings.TrimSpace(s)
 	if s == "" {
 		return pin, false, nil
@@ -123,15 +134,26 @@ func parsePinnedIncarnation(s string) (pin [32]byte, set bool, err error) {
 	s = strings.TrimPrefix(strings.TrimPrefix(s, "0x"), "0X")
 	b, derr := hex.DecodeString(s)
 	if derr != nil || len(b) != 32 {
-		return pin, false, errors.New("an incarnation is 64 hex characters (32 bytes)")
+		return pin, false, fmt.Errorf("%s is 64 hex characters (32 bytes)", what)
 	}
 	copy(pin[:], b)
 	return pin, true, nil
 }
 
+// parsePinnedIncarnation reads a hex32 incarnation; "" is "none".
+func parsePinnedIncarnation(s string) (pin [32]byte, set bool, err error) {
+	return parseHex32(s, "an incarnation")
+}
+
+// anchorPin is the anchor the caller pinned for a G0/G2 receipt.
+type anchorPin struct {
+	b   [32]byte
+	set bool
+}
+
 // HandleVerifyGovernance handles POST /api/v1/proofs/verify/governance.
 //
-//	400  the request itself is malformed (not JSON, unknown member, bad level, bad proof_id, bad pin, neither or both of
+//	400  the request itself is malformed (not JSON, unknown member, bad level, bad proof_id, bad pinned_incarnation or pinned_anchor, neither or both of
 //	     proof_id and proof_data)
 //	405  not POST
 //	413  the body is larger than MaxGovernanceVerifyBodyBytes
@@ -160,7 +182,7 @@ func (h *BundleHandlers) HandleVerifyGovernance(w http.ResponseWriter, r *http.R
 	}
 	// member names are matched EXACTLY: encoding/json would otherwise read "Governance_Level" as governance_level
 	var req GovernanceVerificationRequest
-	if err := decodeExactMembers(top, &req, "proof_id", "governance_level", "proof_data", "pinned_incarnation"); err != nil {
+	if err := decodeExactMembers(top, &req, "proof_id", "governance_level", "proof_data", "pinned_incarnation", "pinned_anchor"); err != nil {
 		h.writeError(w, http.StatusBadRequest, "INVALID_REQUEST", "Invalid request format: "+err.Error())
 		return
 	}
@@ -181,6 +203,12 @@ func (h *BundleHandlers) HandleVerifyGovernance(w http.ResponseWriter, r *http.R
 		h.writeError(w, http.StatusBadRequest, "INVALID_PINNED_INCARNATION", err.Error())
 		return
 	}
+	anchorB, anchorSet, err := parseHex32(req.PinnedAnchor, "an anchor")
+	if err != nil {
+		h.writeError(w, http.StatusBadRequest, "INVALID_PINNED_ANCHOR", err.Error())
+		return
+	}
+	anchor := anchorPin{b: anchorB, set: anchorSet}
 	pinSource := "request"
 	if !pinSet {
 		pin, pinSet, err = parsePinnedIncarnation(h.pinnedIncarnation)
@@ -208,14 +236,14 @@ func (h *BundleHandlers) HandleVerifyGovernance(w http.ResponseWriter, r *http.R
 			h.writeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to retrieve governance proof")
 			return
 		}
-		verdict, err = h.verifyStoredGovernance(r.Context(), h.governance, proofID, req.GovernanceLevel, pin, pinSet, pinSource)
+		verdict, err = h.verifyStoredGovernance(r.Context(), h.governance, proofID, req.GovernanceLevel, pin, pinSet, pinSource, anchor)
 		if err != nil {
 			h.logger.Printf("verify/governance: proof %s: %v", proofID, err)
 			h.writeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to retrieve governance proof")
 			return
 		}
 	} else {
-		verdict = verifyGovernanceProofData(req.GovernanceLevel, req.ProofData, pin, pinSet, pinSource)
+		verdict = verifyGovernanceProofData(req.GovernanceLevel, req.ProofData, pin, pinSet, pinSource, anchor)
 	}
 
 	details := verdict.details
@@ -234,7 +262,7 @@ func (h *BundleHandlers) HandleVerifyGovernance(w http.ResponseWriter, r *http.R
 
 // verifyStoredGovernance verifies the evidence a stored proof carries. It never reads a stored verdict flag (level.Verified):
 // the stored bytes are re-verified. An error is a storage failure (HTTP 500), not a verdict.
-func (h *BundleHandlers) verifyStoredGovernance(ctx context.Context, store governanceStore, proofID uuid.UUID, level string, pin [32]byte, pinSet bool, pinSource string) (governanceVerdict, error) {
+func (h *BundleHandlers) verifyStoredGovernance(ctx context.Context, store governanceStore, proofID uuid.UUID, level string, pin [32]byte, pinSet bool, pinSource string, anchor anchorPin) (governanceVerdict, error) {
 	if level == "G1" {
 		p, err := store.GetPortableV2(ctx, proofID)
 		if err != nil {
@@ -275,7 +303,7 @@ func (h *BundleHandlers) verifyStoredGovernance(ctx context.Context, store gover
 			// the stored row carries the conclusion and not the evidence: nothing was checked and nothing is claimed
 			return govFail(GovStateSummaryOnly, "the stored %s level records a conclusion without a receipt path, so it cannot be re-checked", level), nil
 		}
-		return verifyGovernanceReceipt(level, l.Receipt), nil
+		return verifyGovernanceReceipt(level, l.Receipt, anchor), nil
 	}
 	return govFail(GovStateLevelNotStored, "no %s level is stored for this proof", level), nil
 }
@@ -291,7 +319,7 @@ func (s sliceGovernanceReader) GovernanceLevelRows(_ context.Context, _ uuid.UUI
 //
 //	G0, G2  proof_data.receipt   a receipt evidence object {level?, start, anchor, localBlock, entries}
 //	G1      proof_data.portable  a portable proof v2 document (certen-proof-v2-accumulate-portable/1)
-func verifyGovernanceProofData(level string, data map[string]json.RawMessage, pin [32]byte, pinSet bool, pinSource string) governanceVerdict {
+func verifyGovernanceProofData(level string, data map[string]json.RawMessage, pin [32]byte, pinSet bool, pinSource string, anchor anchorPin) governanceVerdict {
 	if level == "G1" {
 		raw, ok := data["portable"]
 		if !ok || isJSONNull(raw) {
@@ -325,13 +353,22 @@ func verifyGovernanceProofData(level string, data map[string]json.RawMessage, pi
 	if !ev.HasPath() {
 		return govFail(GovStateEvidenceAbsent, "the receipt has no start or anchor")
 	}
-	return verifyGovernanceReceipt(level, &ev)
+	return verifyGovernanceReceipt(level, &ev, anchor)
 }
 
-// verifyGovernanceReceipt recomputes one governance receipt from its own bytes with the validator's receipt verifier. It
-// establishes that the leaf is under the receipt's own anchor, and nothing about whether that anchor is a real Accumulate anchor
-// (that is G1's portable evidence): the response says so.
-func verifyGovernanceReceipt(level string, ev *proof.GovReceiptEvidence) (v governanceVerdict) {
+// verifyGovernanceReceipt recomputes one governance receipt from its own bytes with the validator's receipt verifier and then
+// judges the anchor it recomputes to against the anchor the caller pinned.
+//
+// VerifyMerkle checks the receipt against ITS OWN anchor (and accepts an empty path when start equals anchor), so by itself it
+// says nothing about Accumulate: a caller can invent a receipt that passes it. The headline answer therefore depends on the pin:
+//
+//	no pinned anchor           anchor_unbound    valid=false; details.anchor is the value to pin
+//	pinned anchor != anchor    anchor_mismatch   valid=false (decoded bytes compared, not strings)
+//	pinned anchor == anchor    verified          valid=true: the leaf recomputes to the anchor the caller pinned
+//
+// That the pinned anchor is the real one is the caller's own record; the portable G1 document is what proves an anchor into the
+// certified chain. Both are said in the details.
+func verifyGovernanceReceipt(level string, ev *proof.GovReceiptEvidence, pin anchorPin) (v governanceVerdict) {
 	defer func() {
 		if rec := recover(); rec != nil {
 			v = govFail(GovStateEvidenceInvalid, "the receipt verifier refused the evidence (%v)", rec)
@@ -343,15 +380,30 @@ func verifyGovernanceReceipt(level string, ev *proof.GovReceiptEvidence) (v gove
 	if err := ev.VerifyMerkle(); err != nil {
 		return govFail(GovStateEvidenceInvalid, "%v", err)
 	}
-	return governanceVerdict{state: GovStateVerified, details: map[string]interface{}{
+	got, ok, derr := parseHex32(ev.Anchor, "the anchor of the receipt")
+	if derr != nil || !ok {
+		return govFail(GovStateEvidenceInvalid, "the anchor of the receipt is not 32 bytes of hex")
+	}
+	details := map[string]interface{}{
 		"start":       ev.Start,
 		"anchor":      ev.Anchor,
 		"local_block": ev.LocalBlock,
 		"path_steps":  len(ev.Entries),
-		"establishes": "the leaf (start) recomputes to the receipt's stated anchor from the path in the evidence",
-		"does_not":    "show that the anchor is a real Accumulate anchor: that is the portable G1 evidence",
 		"verifier":    "proof.GovReceiptEvidence.VerifyMerkle",
-	}}
+	}
+	if !pin.set {
+		details["does_not"] = "show that the anchor is a real Accumulate anchor: pin it from your own record, or verify the G1 portable document"
+		return governanceVerdict{state: GovStateAnchorUnbound, details: details,
+			reason: "the receipt recomputes to its own stated anchor, but nothing ties that anchor to Accumulate (a receipt can be invented whose start equals its anchor): send pinned_anchor, the anchor from your own record (details.anchor is the anchor of this receipt)"}
+	}
+	details["pinned_anchor"] = hex.EncodeToString(pin.b[:])
+	if pin.b != got {
+		return governanceVerdict{state: GovStateAnchorMismatch, details: details,
+			reason: "the anchor of the receipt is not the pinned anchor"}
+	}
+	details["establishes"] = "the leaf (start) recomputes, by the path in the evidence, to the anchor the caller pinned"
+	details["does_not"] = "show that the pinned anchor is the right one: that is the caller's own record of the real Accumulate anchor (the G1 portable document proves an anchor into the certified chain)"
+	return governanceVerdict{state: GovStateVerified, details: details}
 }
 
 // verifyGovernancePortable verifies a portable proof v2 document with the validator's offline verifier and judges the

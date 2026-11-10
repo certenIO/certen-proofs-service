@@ -11,7 +11,7 @@ The offline verifier lives in `certenIO/certen-validator` (public), whose `go.mo
 
 | Level | Evidence | Code that decides |
 |---|---|---|
-| G0, G2 | a governance receipt (stored `level_json.receipt`, or `proof_data.receipt`) | `proof.GovReceiptEvidence.VerifyMerkle` (it walks the path with the one `ReceiptVerifier` of the liteclient) |
+| G0, G2 | a governance receipt (stored `level_json.receipt`, or `proof_data.receipt`) | `proof.GovReceiptEvidence.VerifyMerkle` (it walks the path with the one `ReceiptVerifier` of the liteclient), then the receipt's anchor is judged against the caller's `pinned_anchor` |
 | G1 | the portable proof v2 document (`certen-proof-v2-accumulate-portable/1`, evidence 2.0 or 2.1) | `proofv2.VerifyPortable`, then the pinned-incarnation check below |
 | stored G0/G2 | `governance_proof_levels.level_json` of the proof | `proof.GovernanceLevelsFromStorage`, the reader `cmd/proofverify --governance` uses |
 
@@ -52,6 +52,7 @@ that `.github/workflows/govulncheck.yml` enforces).
 | `proof_id` | a stored proof (UUID). Exactly one of `proof_id` and `proof_data` |
 | `proof_data` | evidence in the request. G0, G2: `{"receipt": {level?, start, anchor, localBlock, entries}}`. G1: `{"portable": <portable proof v2 document>}`. No other member is accepted |
 | `pinned_incarnation` | hex32 Accumulate incarnation the caller trusts, from the caller's own record (G1). Optional when the service has `CERTEN_PINNED_INCARNATION` set |
+| `pinned_anchor` | hex32 Accumulate anchor the caller trusts, from the caller's own record (G0, G2; both sources). A receipt is `verified` only against it; without one the answer is `anchor_unbound`. A set but unusable value is `400 INVALID_PINNED_ANCHOR` |
 
 `CERTEN_PINNED_INCARNATION` (service environment, hex32): the incarnation the operator trusts. If it is set and unusable the
 service refuses to start; a request-level pin wins over it.
@@ -67,7 +68,7 @@ HTTP 200 carries a verdict. HTTP 4xx/5xx is a refusal of the request or a storag
 
 | `state` | `valid` | Meaning |
 |---|---|---|
-| `verified` | true | the verifier returned no error and (G1) the proven incarnation equals the pinned one, the validator set verdict is `verified` and no fact is unproven |
+| `verified` | true | the verifier returned no error and (G1) the proven incarnation equals the pinned one, the validator set verdict is `verified` and no fact is unproven; (G0, G2) the receipt recomputes to its own anchor and that anchor equals the `pinned_anchor` |
 | `evidence_absent` | false | nothing to verify: no `receipt`/`portable` member, `null`, no stored level or document |
 | `summary_only` | false | a stored level records a conclusion without a receipt path; nothing was checked and nothing is claimed |
 | `evidence_malformed` | false | the evidence does not parse, does not compose (for example a stored spine shorter than the document needs) or has unknown members |
@@ -76,10 +77,12 @@ HTTP 200 carries a verdict. HTTP 4xx/5xx is a refusal of the request or a storag
 | `validator_set_unverified` | false | the validator set was asserted, not derived and bound to the incarnation |
 | `incarnation_not_pinned` | false | G1 evidence verifies against the incarnation it names, but no incarnation was pinned, so which chain it is about is not established; `details.incarnation` is the value to pin |
 | `incarnation_mismatch` | false | the evidence is about another incarnation than the pinned one |
+| `anchor_unbound` | false | G0, G2: the receipt recomputes to its own stated anchor, but no `pinned_anchor` was given, so nothing ties that anchor to Accumulate (a receipt can be invented whose start equals its anchor); `details.anchor` is the value to pin and `reason` says how |
+| `anchor_mismatch` | false | G0, G2: the receipt's anchor is not the pinned anchor (decoded bytes are compared, not strings) |
 | `level_not_stored` | false | the proof has no stored row for the requested level |
 
 HTTP errors: `400` `INVALID_REQUEST`, `INVALID_LEVEL`, `INVALID_EVIDENCE_SOURCE` (neither or both of the sources),
-`INVALID_PROOF_ID`, `INVALID_PINNED_INCARNATION`; `405`; `413` `REQUEST_TOO_LARGE`; `500` `INTERNAL_ERROR` (storage
+`INVALID_PROOF_ID`, `INVALID_PINNED_INCARNATION`, `INVALID_PINNED_ANCHOR`; `405`; `413` `REQUEST_TOO_LARGE`; `500` `INTERNAL_ERROR` (storage
 failure, or an unusable configured pin). A storage error text never reaches the client.
 
 ## What `valid: true` establishes, and what it does not
@@ -87,8 +90,12 @@ failure, or an unusable configured pin). A storage error text never reaches the 
 - G1 (`proofv2.VerifyPortable`): the document's evidence, replayed offline from the genesis of the pinned incarnation through
   the Directory's major blocks, proves the transaction receipt, the certified root, the authority pages and the validator
   quorum. This is the strong claim. It needs a pin; without one the answer is `incarnation_not_pinned`.
-- G0, G2 (`VerifyMerkle`): the receipt's leaf recomputes to the receipt's own stated anchor. It does NOT show that the anchor
-  is a real Accumulate anchor; that is what the G1 document proves. The response says so in `details.does_not`. This is
-  PARTIAL by design, not a default.
-- A stored `verified` flag is never read, in either direction: real evidence verifies with the flag false, and tampered or
+- G0, G2 (`VerifyMerkle` plus the pinned anchor): `VerifyMerkle` checks a receipt against its OWN anchor and accepts an empty
+  path when start equals anchor, so by itself it says nothing about Accumulate. A receipt is therefore `verified` only when its
+  anchor equals the `pinned_anchor` the caller supplies: the leaf recomputes, by the path in the evidence, to the anchor the caller
+  pinned. That the pinned anchor is the right one is the caller's own record, and the response says so in `details.does_not`;
+  the G1 document is what proves an anchor into the certified chain. Without a pin the answer is `anchor_unbound`, with another
+  one `anchor_mismatch`; both are `valid: false` (`TestGovernanceForgedReceiptIsNeverValidWithoutAPinnedAnchor`,
+  `TestGovernanceRealReceiptNeedsThePinnedAnchorInBothSources`).
+- A stored `verified` flag is never read, in either direction: real evidence with the right pin verifies with the flag false, and tampered or
   summary-only evidence is refused with the flag true (`TestGovernanceStoredVerifiedFlagIsNeverTheAnswer`).

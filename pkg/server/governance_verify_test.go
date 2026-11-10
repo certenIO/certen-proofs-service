@@ -366,9 +366,10 @@ func govReceiptRow(level string, receipt interface{}, verifiedFlag bool) databas
 
 func TestGovernanceReceiptRealReceiptVerifiesInBothSources(t *testing.T) {
 	rc := govLiveReceipt(t)
+	pin := rc["anchor"].(string) // the anchor of the real transaction's receipt, as the caller's own record would hold it
 	for _, level := range []string{"G0", "G2"} {
 		// carried in the request
-		got := govCall(t, govTestHandler(&govFakeStore{}, ""), http.MethodPost, govMustJSON(t, map[string]interface{}{"governance_level": level, "proof_data": map[string]interface{}{"receipt": rc}}))
+		got := govCall(t, govTestHandler(&govFakeStore{}, ""), http.MethodPost, govMustJSON(t, map[string]interface{}{"governance_level": level, "pinned_anchor": pin, "proof_data": map[string]interface{}{"receipt": rc}}))
 		if !got.Resp.Valid || got.Resp.Details["path_steps"].(float64) != 55 {
 			t.Fatalf("%s carried: the real receipt must verify: %+v", level, got.Resp)
 		}
@@ -377,7 +378,7 @@ func TestGovernanceReceiptRealReceiptVerifiesInBothSources(t *testing.T) {
 		}
 		// stored: the flag is FALSE and the evidence is real: the answer is still valid (the flag is not read)
 		st := &govFakeStore{levels: []database.GovernanceProofLevel{govReceiptRow(level, rc, false)}}
-		got = govCall(t, govTestHandler(st, ""), http.MethodPost, govMustJSON(t, map[string]string{"proof_id": liveProofID, "governance_level": level}))
+		got = govCall(t, govTestHandler(st, ""), http.MethodPost, govMustJSON(t, map[string]string{"proof_id": liveProofID, "governance_level": level, "pinned_anchor": pin}))
 		if !got.Resp.Valid {
 			t.Fatalf("%s stored: real evidence must verify whatever the stored flag says: %+v", level, got.Resp)
 		}

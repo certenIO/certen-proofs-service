@@ -6,6 +6,8 @@
 package server
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"io"
 	"log"
@@ -54,6 +56,28 @@ func TestGovernanceFailBeforeNoEvidenceIsNeverValid(t *testing.T) {
 		if status == http.StatusOK {
 			if s, _ := out["state"].(string); s == "" {
 				t.Fatalf("%s: a 200 verdict must carry a named state: %v", name, out)
+			}
+		}
+	}
+}
+
+// DAX-F16: a receipt the caller invented (self-consistent: start equals anchor with no path, or a one-entry path to a root computed
+// by the caller) is not valid. At e6b4ba0 the answer was valid:true state:verified; no pinned anchor means a named state now.
+func TestGovernanceFailBeforeForgedReceiptIsNotValid(t *testing.T) {
+	leaf := strings.Repeat("ab", 32)
+	sibling := strings.Repeat("cd", 32)
+	lb, _ := hex.DecodeString(leaf)
+	sb, _ := hex.DecodeString(sibling)
+	root := sha256.Sum256(append(append([]byte{}, lb...), sb...))
+	forged := map[string]string{
+		"start == anchor, empty path": `{"start":"` + leaf + `","anchor":"` + leaf + `","localBlock":1,"entries":[]}`,
+		"one-entry path":              `{"start":"` + leaf + `","anchor":"` + hex.EncodeToString(root[:]) + `","localBlock":1,"entries":[{"hash":"` + sibling + `","right":true}]}`,
+	}
+	for name, receipt := range forged {
+		for _, level := range []string{"G0", "G2"} {
+			status, out := postGovernance(t, `{"governance_level":"`+level+`","proof_data":{"receipt":`+receipt+`}}`)
+			if status == http.StatusOK && out["valid"] == true {
+				t.Fatalf("%s %s: a receipt the caller invented answered valid:true state=%v", name, level, out["state"])
 			}
 		}
 	}
