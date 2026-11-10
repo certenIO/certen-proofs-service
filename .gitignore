@@ -5,6 +5,8 @@
 *.so
 *.dylib
 /proof-service
+/proof-service-linux
+/bin/
 
 # Test binary
 *.test

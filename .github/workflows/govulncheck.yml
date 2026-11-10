@@ -1,0 +1,39 @@
+name: govulncheck
+
+# Blocking: a reachable known vulnerability in the Go standard library or in a module this service calls fails the
+# build. There is no continue-on-error and no allowlist. A finding is fixed by raising the dependency (or the Go patch
+# release, which setup-go resolves to the newest 1.26.x) and never by excluding the advisory.
+#
+# The Go line of go.mod is 1.26.10 on purpose: with Go 1.25.14, the last release of the 1.25 line, govulncheck reports
+# reachable standard-library advisories (crypto/x509, net/http, net/textproto) whose fixes exist only from 1.26.9 and 1.26.10,
+# so a 1.25 build of this service ships known vulnerable code. go.mod refuses a toolchain older than the first fixed one.
+#
+# govulncheck is pinned to an exact release (v1.7.0 is the newest release whose own go.mod needs only Go 1.25.0, so it
+# builds under the toolchain this job installs). Raise the pin deliberately, in a commit of its own.
+#
+# It also runs weekly so that an advisory published after the last merge still turns this repository red.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  schedule:
+    - cron: '41 6 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  govulncheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+          check-latest: true
+      - name: Install the pinned govulncheck
+        run: go install golang.org/x/vuln/cmd/govulncheck@v1.7.0
+      - name: govulncheck ./...
+        run: govulncheck ./...

@@ -2,7 +2,7 @@
 # Multi-stage build for minimal production image
 
 # Stage 1: Build the Go binary
-FROM golang:1.21-alpine AS builder
+FROM golang:1.26-alpine AS builder
 
 WORKDIR /app
 
