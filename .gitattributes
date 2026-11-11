@@ -2,3 +2,5 @@
 # copies are pinned by sha256: an end-of-line conversion on a checkout (core.autocrlf) would change the bytes and fail both.
 pkg/server/testdata/finality/* -text
 pkg/database/testdata/validator/* -text
+pkg/server/testdata/governance/* -text
+pkg/server/testdata/governance/vectors/* -text

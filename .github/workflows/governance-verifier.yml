@@ -1,0 +1,28 @@
+name: governance-verifier
+
+# POST /api/v1/proofs/verify/governance runs the validator's own verifier (docs/verify-governance.md). This job fails when the
+# endpoint stops agreeing with it: the endpoint tests (real stored proof, the validator's conformance vectors, every refusal)
+# and the provenance test, which fails when go.mod moves to another validator commit, or a validator source file the endpoint
+# depends on differs from docs/verify-governance-provenance.json.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  governance-verifier:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+          check-latest: true
+      - name: Download the pinned validator module
+        run: go mod download
+      - name: Endpoint and provenance tests
+        run: go test ./pkg/server/ -run 'TestGovernance' -count=1 -v
