@@ -444,7 +444,7 @@ func (h *BundleHandlers) HandleVerifyBundle(w http.ResponseWriter, r *http.Reque
 	if err := json.Unmarshal(jsonData, &bundleContent); err == nil {
 		if proofComponents, ok := bundleContent["proof_components"].(map[string]interface{}); ok {
 			componentStatus["merkle_inclusion"] = proofComponents["1_merkle_inclusion"] != nil
-			componentStatus["anchor_reference"] = proofComponents["2_anchor_reference"] != nil
+			componentStatus["anchor_reference"] = anchorReferencePresent(proofComponents["2_anchor_reference"])
 			componentStatus["chained_proof"] = proofComponents["3_chained_proof"] != nil
 			componentStatus["governance_proof"] = proofComponents["4_governance_proof"] != nil
 		}
@@ -888,4 +888,17 @@ func minInt(a, b int) int {
 		return a
 	}
 	return b
+}
+
+// anchorReferencePresent is true only for an anchor reference that states its anchor block. A reference carrying a
+// "state" (the validator's anchor_block_unread, AGT-F11) names only the anchor transaction and is not a present anchor.
+func anchorReferencePresent(v interface{}) bool {
+	ref, ok := v.(map[string]interface{})
+	if !ok || ref == nil {
+		return false
+	}
+	if state, _ := ref["state"].(string); state != "" {
+		return false
+	}
+	return true
 }
